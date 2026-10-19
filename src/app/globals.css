@@ -237,6 +237,80 @@ a { color: inherit; text-decoration: none; }
 .participant-status-muted { color: #9a8a62; }
 .row-delete { padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: #a7796c; font-size: 9px; }
 .row-delete:hover { background: #fbefec; }
+.row-actions { display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.row-edit { padding: 3px 6px; border: 0; border-radius: 4px; background: transparent; color: #607b63; font-size: 9px; font-weight: 600; }
+.row-edit:hover { background: #eef3ec; }
+.registration-list { margin-top: 16px; border-top: 1px solid #eff1ed; }
+.registration-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid #f0f1ee; }
+.registration-row > div { display: grid; gap: 4px; min-width: 0; }
+.registration-row strong { color: #434d44; font-size: 11px; font-weight: 600; }
+.registration-row span { color: #8f978f; font-size: 9px; }
+.registration-list + .camp-form, .registration-list ~ .camp-form { margin-top: 16px; }
+.registration-list .empty-state { padding: 18px 8px; }
+
+.participant-status-warn { color: #a5702f; }
+.camp-form textarea { width: 100%; padding: 8px 10px; border: 1px solid #e4e9e2; border-radius: 7px; outline: none; background: #fff; color: #3b453d; font: inherit; font-size: 11px; line-height: 1.5; resize: vertical; }
+.camp-form textarea:focus { border-color: #789a7c; box-shadow: 0 0 0 3px #789a7c1c; }
+.field-hint { margin: -6px 0 0; color: #8f978f; font-size: 9px; line-height: 1.5; }
+.stat-value-small { font-size: 18px; letter-spacing: -.4px; }
+.cell-title { display: block; color: #4b554c; font-size: 10px; font-weight: 600; }
+.cell-sub { display: block; margin-top: 3px; color: #939a93; font-size: 9px; }
+.cell-wrap { min-width: 150px; white-space: normal; }
+.payments-table td { padding: 8px 8px 8px 0; white-space: normal; vertical-align: middle; }
+.payments-table td:first-child { min-width: 180px; padding-left: 4px; }
+
+.athlete-layout { display: grid; grid-template-columns: 250px minmax(0, 1fr); align-items: start; gap: 14px; }
+.athlete-list-panel { position: sticky; top: 12px; padding: 12px; }
+.athlete-search { width: 100%; }
+.athlete-list { display: grid; gap: 2px; max-height: 62vh; margin-top: 10px; overflow-y: auto; }
+.athlete-item { width: 100%; display: flex; align-items: center; gap: 10px; padding: 8px; border: 0; border-radius: 8px; background: transparent; text-align: left; }
+.athlete-item:hover { background: #f4f6f2; }
+.athlete-item-active, .athlete-item-active:hover { background: #e9f1e6; }
+.athlete-item-copy { display: grid; gap: 3px; min-width: 0; }
+.athlete-item-copy strong { overflow: hidden; color: #435044; font-size: 11px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
+.athlete-item-copy span { color: #8f978f; font-size: 9px; }
+.athlete-detail { display: grid; gap: 14px; min-width: 0; }
+.athlete-detail .stats-grid { margin-bottom: 0; }
+.athlete-header { display: flex; align-items: center; gap: 14px; }
+.athlete-avatar-large { width: 46px; height: 46px; font-size: 14px; }
+.athlete-header-copy { flex: 1; min-width: 0; }
+.athlete-header-copy h2 { margin: 0; color: #2f3a31; font-size: 17px; letter-spacing: -.4px; }
+.athlete-header-copy p { margin: 5px 0 0; color: #868e86; font-size: 10px; line-height: 1.5; }
+.detail-panel { padding-bottom: 14px; scroll-margin-top: 12px; }
+.detail-panel .panel-heading { margin-bottom: 12px; }
+.detail-panel .panel-footer { margin-top: 8px; }
+.detail-panel > .empty-state { padding: 24px 12px; }
+.inline-form { display: flex; align-items: flex-end; gap: 10px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eff1ed; }
+.inline-form label { display: grid; flex: 1; gap: 6px; color: #566057; font-size: 10px; font-weight: 600; }
+.inline-form select { width: 100%; height: 34px; padding: 0 9px; border: 1px solid #e4e9e2; border-radius: 7px; background: #fff; color: #3b453d; font: inherit; font-size: 11px; }
+.pay-badge { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 9px; font-weight: 650; }
+.pay-paid { background: #e6f1e3; color: #4d7655; }
+.pay-completed { background: #ebeeea; color: #667267; }
+.pay-unpaid { background: #fbf0dc; color: #94702a; }
+.pay-expired { background: #f8e6e1; color: #9a5a4b; }
+.pay-waitlisted { background: #f1ebf4; color: #85699a; }
+.attend-badge { display: inline-block; padding: 3px 8px; border-radius: 20px; font-size: 9px; font-weight: 650; }
+.attend-present { background: #e6f1e3; color: #4d7655; }
+.attend-absent { background: #f8e6e1; color: #9a5a4b; }
+.attend-excused { background: #f7efd9; color: #8d7a3d; }
+.kv-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px 18px; margin: 0; }
+.kv-grid dt { margin-bottom: 5px; color: #9aa19a; font-size: 9px; font-weight: 650; letter-spacing: .6px; text-transform: uppercase; }
+.kv-grid dd { margin: 0; color: #4b554c; font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.kv-wide { grid-column: 1 / -1; }
+.medical-alert { margin-bottom: 14px; padding: 9px 11px; border: 1px solid #efdcb6; border-radius: 8px; background: #fcf6e8; color: #85622a; font-size: 10px; font-weight: 600; line-height: 1.5; }
+@media (max-width: 860px) {
+  .athlete-layout { grid-template-columns: minmax(0, 1fr); }
+  .athlete-list-panel { position: static; }
+  .athlete-list { max-height: 220px; }
+  .kv-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 560px) {
+  .athlete-header { flex-wrap: wrap; }
+  .athlete-header .secondary-button { width: 100%; }
+  .kv-grid { grid-template-columns: minmax(0, 1fr); }
+  .inline-form { align-items: stretch; flex-direction: column; }
+  .payments-table { min-width: 560px; }
+}
 .attendance-modal { width: min(100%, 540px); }
 .attendance-tools { display: flex; justify-content: flex-end; gap: 14px; margin-top: 16px; }
 .attendance-list { max-height: 46vh; overflow-y: auto; margin-top: 8px; border-top: 1px solid #eff1ed; }
