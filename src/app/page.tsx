@@ -85,7 +85,6 @@ export default function Home() {
   const [campFilter, setCampFilter] = useState("");
   const [showAllCamps, setShowAllCamps] = useState(false);
   const [participantQuery, setParticipantQuery] = useState("");
-  const [participantCampFilter, setParticipantCampFilter] = useState("");
   const [showAllParticipants, setShowAllParticipants] = useState(false);
   const [showFullSchedule, setShowFullSchedule] = useState(false);
 
@@ -188,19 +187,19 @@ export default function Home() {
   });
   const participantTerm = participantQuery.trim().toLowerCase();
   const filteredParticipants = participantRows.filter((row) =>
-    (!participantCampFilter || row.campIds.includes(participantCampFilter)) &&
-    (!participantTerm || `${fullName(row)} ${row.campNames}`.toLowerCase().includes(participantTerm)));
+    !participantTerm || `${fullName(row)} ${row.campNames}`.toLowerCase().includes(participantTerm));
   const shownParticipants = showAllParticipants ? filteredParticipants : filteredParticipants.slice(0, 5);
   const activeAthletes = new Set(regs.filter((item) => item.status === "registered").map((item) => item.participantId)).size;
   const awaitingPayment = regs.filter((item) => item.status === "pending").length;
 
-  const sortedSessions = sortSessions(sessions);
+  const heldSessions = sessions.filter((item) => item.status !== "cancelled");
+  const sortedSessions = sortSessions(heldSessions);
   const upcomingSessions = sortedSessions.filter((item) => item.date >= today);
   const nextDay = upcomingSessions[0]?.date;
   const nextDaySessions = upcomingSessions.filter((item) => item.date === nextDay);
   const shownSessions = showFullSchedule ? upcomingSessions : nextDaySessions;
-  const sessionsThisWeek = sessions.filter((item) => item.date >= weekStart && item.date <= weekEnd).length;
-  const sessionsToday = sessions.filter((item) => item.date === today).length;
+  const sessionsThisWeek = heldSessions.filter((item) => item.date >= weekStart && item.date <= weekEnd).length;
+  const sessionsToday = heldSessions.filter((item) => item.date === today).length;
 
   const sessionDateById = new Map(sessions.map((item) => [item.id, item.date]));
   const attendanceByDate = new Map<string, { present: number; total: number }>();
@@ -246,6 +245,13 @@ export default function Home() {
       setFormError("The camp end date must be on or after its start date.");
       return;
     }
+    const stranded = editingCamp
+      ? sessions.filter((item) => item.campId === editingCamp.id && (item.date < values.startDate || item.date > values.endDate)).length
+      : 0;
+    if (stranded > 0) {
+      setFormError(`${stranded} ${stranded === 1 ? "session falls" : "sessions fall"} outside these dates. Move or delete ${stranded === 1 ? "it" : "them"} on the camp page first.`);
+      return;
+    }
 
     setSaving(true);
     setFormError("");
@@ -286,7 +292,6 @@ export default function Home() {
     setRegistrations((current) => current.filter((item) => item.campId !== camp.id));
     setSessions((current) => current.filter((item) => item.campId !== camp.id));
     setAttendance((current) => current.filter((item) => !removedSessions.has(item.sessionId)));
-    if (participantCampFilter === camp.id) setParticipantCampFilter("");
   }
 
   async function saveParticipant(event: FormEvent<HTMLFormElement>) {
@@ -383,7 +388,7 @@ export default function Home() {
       id = inserted.data.id;
     }
 
-    setSessions((current) => [...current, { id, ...values }]);
+    setSessions((current) => [...current, { id, ...values, status: "scheduled", cancelReason: "" }]);
     setSaving(false);
     closeModal();
   }
@@ -460,17 +465,9 @@ export default function Home() {
     closeModal();
   }
 
-  function showCampParticipants(campId: string) {
-    setParticipantCampFilter(campId);
-    setParticipantQuery("");
-    setShowAllParticipants(true);
-    document.getElementById("participants")?.scrollIntoView({ behavior: "smooth" });
-  }
-
   const nextDayLabel = nextDay
     ? { month: new Date(`${nextDay}T12:00:00`).toLocaleDateString("en-US", { month: "short" }).toUpperCase(), day: new Date(`${nextDay}T12:00:00`).getDate() }
     : null;
-  const filteredCampName = participantCampFilter ? campById.get(participantCampFilter)?.name : undefined;
   const statusClass = (status: string) => status === "Active" ? "" : status === "Payment due" || status === "Expired" ? "participant-status-warn" : "participant-status-muted";
 
   return (
@@ -605,7 +602,7 @@ export default function Home() {
                   <article className="camp-card" key={camp.id}>
                     <div className={`camp-card-art art-${camp.color}`}><div className="art-orbit orbit-one" /><div className="art-orbit orbit-two" /><div className="art-label">STRIDE <span>ATHLETICS</span></div><div className="art-number">{String(campViews.indexOf(camp) + 1).padStart(2, "0")}</div></div>
                     <div className="camp-card-body">
-                      <div className="camp-title-row"><h3>{camp.name}</h3><span className={`status-pill status-${camp.status.toLowerCase().replace(" ", "-")}`}><span />{camp.status}</span></div>
+                      <div className="camp-title-row"><h3><Link className="camp-card-link" href={`/camps?id=${camp.id}`}>{camp.name}</Link></h3><span className={`status-pill status-${camp.status.toLowerCase().replace(" ", "-")}`}><span />{camp.status}</span></div>
                       <div className="camp-meta">
                         <span><CalendarDays size={14} />{formatDate(camp.startDate)} – {formatDate(camp.endDate)}</span>
                         <span><MapPin size={14} />{camp.location}</span>
@@ -613,7 +610,7 @@ export default function Home() {
                       </div>
                       <div className="camp-capacity"><div className="capacity-label"><span>{camp.ageGroup}</span><span><strong>{camp.enrolled}</strong> / {camp.capacity} paid{camp.waitlisted > 0 ? ` · ${camp.waitlisted} waitlisted` : ""}</span></div><div className="progress-track"><span style={{ width: `${fill}%` }} /></div></div>
                       <div className="camp-detail-actions">
-                        <button className="camp-details" onClick={() => showCampParticipants(camp.id)} type="button">Athletes <ArrowRight size={15} /></button>
+                        <Link className="camp-details" href={`/camps?id=${camp.id}`}>Athletes <ArrowRight size={15} /></Link>
                         <div className="camp-link-actions">
                           <button className="camp-edit" onClick={() => { setEditingCamp(camp); openModal({ type: "camp" }); }} type="button">Edit</button>
                           <button aria-label={`Delete ${camp.name}`} className="camp-delete" onClick={() => deleteCamp(camp)} type="button">Delete</button>
@@ -640,9 +637,6 @@ export default function Home() {
               <button className="secondary-button" type="button" onClick={() => openModal({ type: "participant" })}><UserPlus size={16} />Add athlete</button>
             </div>
           </div>
-          {filteredCampName && (
-            <div className="filter-chip"><span>Camp: {filteredCampName}</span><button aria-label="Clear camp filter" type="button" onClick={() => setParticipantCampFilter("")}><X size={13} /></button></div>
-          )}
           {shownParticipants.length > 0 ? (
             <div className="participant-table-wrap">
               <table className="participant-table">

@@ -6,7 +6,7 @@ import { Activity, ArrowRight, CalendarDays, Clock3, Menu, Search, Users, X } fr
 import { useSupabase } from "@/lib/supabase-context";
 
 type Props = {
-  active: "overview" | "athletes";
+  active: "overview" | "camps" | "athletes";
   breadcrumb: string;
   campCount: number;
   athleteCount: number;
@@ -23,6 +23,7 @@ export function AppShell({ active, breadcrumb, campCount, athleteCount, search, 
 
   return (
     <div className="app-shell" id="top">
+      {navOpen && <div className="nav-backdrop" onClick={closeNav} aria-hidden="true" />}
       <aside className={`sidebar ${navOpen ? "sidebar-open" : ""}`}>
         <Link className="brand" href="/" aria-label="Stride home" onClick={closeNav}>
           <span className="brand-mark"><Activity size={20} strokeWidth={2.6} /></span>
@@ -37,7 +38,7 @@ export function AppShell({ active, breadcrumb, campCount, athleteCount, search, 
         <p className="nav-label">WORKSPACE</p>
         <nav aria-label="Main navigation" className="main-nav">
           <Link className={`nav-link ${active === "overview" ? "nav-link-active" : ""}`} href="/" onClick={closeNav}><Activity size={18} />Overview</Link>
-          <Link className="nav-link" href="/#camps" onClick={closeNav}><CalendarDays size={18} />Camps<span className="nav-count">{campCount}</span></Link>
+          <Link className={`nav-link ${active === "camps" ? "nav-link-active" : ""}`} href="/camps" onClick={closeNav}><CalendarDays size={18} />Camps<span className="nav-count">{campCount}</span></Link>
           <Link className="nav-link" href="/#schedule" onClick={closeNav}><Clock3 size={18} />Schedule</Link>
           <Link className={`nav-link ${active === "athletes" ? "nav-link-active" : ""}`} href="/participants" onClick={closeNav}><Users size={18} />Athlete records<span className="nav-count">{athleteCount}</span></Link>
         </nav>

@@ -43,7 +43,17 @@ export type Registration = {
   paymentMethod: string;
   paymentReference: string;
 };
-export type CampSession = { id: string; campId: string; title: string; date: string; startTime: string; endTime: string };
+export type SessionStatus = "scheduled" | "cancelled";
+export type CampSession = {
+  id: string;
+  campId: string;
+  title: string;
+  date: string;
+  startTime: string;
+  endTime: string;
+  status: SessionStatus;
+  cancelReason: string;
+};
 export type AttendanceRecord = { sessionId: string; participantId: string; status: AttendanceStatus };
 export type VitalRecord = {
   id: string;
@@ -51,6 +61,13 @@ export type VitalRecord = {
   recordedOn: string;
   heightCm: number | null;
   weightKg: number | null;
+  bmi: number | null;
+  bodyFatPct: number | null;
+  waistCm: number | null;
+  hipCm: number | null;
+  chestCm: number | null;
+  armCm: number | null;
+  thighCm: number | null;
   restingHeartRate: number | null;
   systolic: number | null;
   diastolic: number | null;
@@ -155,6 +172,41 @@ export function regularity(rate: number | null) {
   return "Rarely attends";
 }
 
+export function computeBmi(weightKg: number | null, heightCm: number | null) {
+  if (!weightKg || !heightCm) return null;
+  return Math.round((weightKg / (heightCm / 100) ** 2) * 10) / 10;
+}
+
+export function bmiCategory(bmi: number | null, age: number | null) {
+  if (bmi === null) return "";
+  if (age !== null && age < 18) return "Under 18: compare with BMI-for-age charts";
+  if (bmi < 18.5) return "Underweight";
+  if (bmi < 25) return "Healthy range";
+  if (bmi < 30) return "Overweight";
+  return "Obesity range";
+}
+
+export function isCompletedRegistration(registration: Registration, camp: Camp | undefined, today: string) {
+  return Boolean(camp && registration.paidOn && camp.endDate < today &&
+    (registration.status === "registered" || registration.status === "expired"));
+}
+
+export function registrationView(registration: Registration, camp: Camp | undefined, today: string) {
+  if (isCompletedRegistration(registration, camp, today)) {
+    return { label: "Completed", cls: "pay-completed", detail: `Camp ended ${formatDateYear(camp?.endDate ?? today)}` };
+  }
+  if (registration.status === "registered") {
+    return { label: "Paid", cls: "pay-paid", detail: `Valid until ${formatDateYear(registration.expiresOn)}` };
+  }
+  if (registration.status === "expired") {
+    return { label: "Expired", cls: "pay-expired", detail: `Expired ${formatDateYear(registration.expiresOn)} — removed from roster` };
+  }
+  if (registration.status === "waitlisted") {
+    return { label: "Waitlisted", cls: "pay-waitlisted", detail: "Camp was full when registered" };
+  }
+  return { label: "Not paid", cls: "pay-unpaid", detail: `${formatMoney(registration.amount)} due to confirm the place` };
+}
+
 // A paid registration whose valid-until date has passed is treated as expired (removed from the roster).
 export function withExpiry(registration: Registration, today: string): Registration {
   if (registration.status === "registered" && registration.expiresOn && registration.expiresOn < today) {
@@ -219,9 +271,9 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
     client.from("camps").select("id, name, location, start_date, end_date, age_group, capacity, price").order("start_date", { ascending: true }),
     client.from("participants").select("id, first_name, last_name, email, guardian_name, guardian_email, date_of_birth, blood_type, allergies, medical_conditions, medications, emergency_contact_name, emergency_contact_phone, medical_notes").order("created_at", { ascending: false }),
     client.from("camp_registrations").select("id, camp_id, participant_id, status, payment_status, amount, paid_at, expires_on, payment_method, payment_reference"),
-    client.from("sessions").select("id, camp_id, title, starts_at, ends_at").order("starts_at", { ascending: true }),
+    client.from("sessions").select("id, camp_id, title, starts_at, ends_at, status, cancel_reason").order("starts_at", { ascending: true }),
     client.from("attendance").select("session_id, participant_id, status"),
-    client.from("participant_vitals").select("id, participant_id, recorded_on, height_cm, weight_kg, resting_heart_rate, systolic, diastolic, notes").order("recorded_on", { ascending: false }),
+    client.from("participant_vitals").select("id, participant_id, recorded_on, height_cm, weight_kg, bmi, body_fat_pct, waist_cm, hip_cm, chest_cm, arm_cm, thigh_cm, resting_heart_rate, systolic, diastolic, notes").order("recorded_on", { ascending: false }),
   ]);
 
   const failed = [campResult, participantResult, registrationResult, sessionResult, attendanceResult, vitalResult].find((result) => result.error);
@@ -255,6 +307,7 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
         id: row.id, campId: row.camp_id, title: row.title, date: localDate(start),
         startTime: `${pad(start.getHours())}:${pad(start.getMinutes())}`,
         endTime: `${pad(end.getHours())}:${pad(end.getMinutes())}`,
+        status: row.status === "cancelled" ? "cancelled" : "scheduled", cancelReason: row.cancel_reason ?? "",
       };
     }),
     attendance: (attendanceResult.data ?? []).map((row) => ({
@@ -263,10 +316,66 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
     vitals: (vitalResult.data ?? []).map((row) => ({
       id: row.id, participantId: row.participant_id, recordedOn: row.recorded_on,
       heightCm: optionalNumber(row.height_cm), weightKg: optionalNumber(row.weight_kg),
+      bmi: optionalNumber(row.bmi), bodyFatPct: optionalNumber(row.body_fat_pct),
+      waistCm: optionalNumber(row.waist_cm), hipCm: optionalNumber(row.hip_cm),
+      chestCm: optionalNumber(row.chest_cm), armCm: optionalNumber(row.arm_cm), thighCm: optionalNumber(row.thigh_cm),
       restingHeartRate: optionalNumber(row.resting_heart_rate), systolic: optionalNumber(row.systolic),
       diastolic: optionalNumber(row.diastolic), notes: row.notes ?? "",
     })),
   };
+}
+
+export function campDays(camp: Camp) {
+  const days: string[] = [];
+  for (let day = camp.startDate; day <= camp.endDate && days.length < 120; day = addDays(day, 1)) days.push(day);
+  return days;
+}
+
+export function weekdayLabel(date: string) {
+  return new Date(`${date}T12:00:00`).toLocaleDateString("en-US", { weekday: "short" });
+}
+
+export function validateSession(camp: Camp, date: string, startTime: string, endTime: string) {
+  if (date < camp.startDate || date > camp.endDate) {
+    return `Sessions must fall within the camp dates (${formatDate(camp.startDate)} – ${formatDate(camp.endDate)}).`;
+  }
+  if (endTime <= startTime) return "The end time must be after the start time.";
+  return "";
+}
+
+export async function insertSessions(
+  client: SupabaseClient | null,
+  campId: string,
+  items: { title: string; date: string; startTime: string; endTime: string }[],
+): Promise<{ sessions: CampSession[]; error: string }> {
+  if (!client) return { sessions: items.map((item) => ({ id: crypto.randomUUID(), campId, status: "scheduled" as const, cancelReason: "", ...item })), error: "" };
+
+  const { data, error } = await client.from("sessions").insert(items.map((item) => ({
+    camp_id: campId, title: item.title, starts_at: toIso(item.date, item.startTime), ends_at: toIso(item.date, item.endTime),
+  }))).select("id");
+  if (error || !data) return { sessions: [], error: error?.message ?? "No sessions were saved" };
+  return { sessions: data.map((row, index) => ({ id: row.id, campId, status: "scheduled" as const, cancelReason: "", ...items[index] })), error: "" };
+}
+
+export async function saveAttendanceFor(
+  client: SupabaseClient | null,
+  sessionId: string,
+  entries: [string, AttendanceStatus][],
+  clearedIds: string[],
+) {
+  if (!client) return "";
+  if (entries.length) {
+    const { error } = await client.from("attendance").upsert(
+      entries.map(([participantId, status]) => ({ session_id: sessionId, participant_id: participantId, status })),
+      { onConflict: "session_id,participant_id" },
+    );
+    if (error) return error.message;
+  }
+  if (clearedIds.length) {
+    const { error } = await client.from("attendance").delete().eq("session_id", sessionId).in("participant_id", clearedIds);
+    if (error) return error.message;
+  }
+  return "";
 }
 
 // Demo-mode sample data, used only when Supabase is not configured.
@@ -302,13 +411,17 @@ export function seedData(): CampData {
     };
   });
   const pastDays = ["2026-10-05", "2026-10-06", "2026-10-07", "2026-10-08", "2026-10-09"];
-  const sessions: CampSession[] = [
+  const baseSessions: Omit<CampSession, "status" | "cancelReason">[] = [
     { id: "demo-s-1", campId: "demo-camp-1", title: "Ball control & footwork", date: "2026-10-19", startTime: "09:00", endTime: "10:30" },
     { id: "demo-s-2", campId: "demo-camp-1", title: "Speed mechanics", date: "2026-10-19", startTime: "11:30", endTime: "12:30" },
     { id: "demo-s-3", campId: "demo-camp-1", title: "Small-sided match play", date: "2026-10-19", startTime: "14:00", endTime: "15:30" },
     { id: "demo-s-4", campId: "demo-camp-1", title: "Passing patterns", date: "2026-10-20", startTime: "09:00", endTime: "10:30" },
     { id: "demo-s-5", campId: "demo-camp-2", title: "Agility ladder circuits", date: "2026-10-26", startTime: "10:00", endTime: "11:30" },
     ...pastDays.map((date, index) => ({ id: `demo-past-${index}`, campId: "demo-camp-4", title: "Foundations training", date, startTime: "10:00", endTime: "11:30" })),
+  ];
+  const sessions: CampSession[] = [
+    ...baseSessions.map((item) => ({ ...item, status: "scheduled" as const, cancelReason: "" })),
+    { id: "demo-s-6", campId: "demo-camp-1", title: "Fitness circuits", date: "2026-10-21", startTime: "09:00", endTime: "10:30", status: "cancelled", cancelReason: "Heavy rain" },
   ];
   const campFourAthletes = plan.filter(([, campId]) => campId === "demo-camp-4").map(([participantId]) => participantId);
   const attendance: AttendanceRecord[] = pastDays.flatMap((_, day) =>
@@ -318,9 +431,9 @@ export function seedData(): CampData {
     }),
   );
   const vitals: VitalRecord[] = [
-    { id: "demo-v-3", participantId: "demo-p-1", recordedOn: "2026-10-09", heightCm: 152, weightKg: 44.5, restingHeartRate: 72, systolic: 108, diastolic: 68, notes: "End of Foundations camp" },
-    { id: "demo-v-2", participantId: "demo-p-1", recordedOn: "2026-10-05", heightCm: 151.5, weightKg: 45, restingHeartRate: 76, systolic: 110, diastolic: 70, notes: "" },
-    { id: "demo-v-1", participantId: "demo-p-1", recordedOn: "2026-09-01", heightCm: 150, weightKg: 46, restingHeartRate: 80, systolic: 112, diastolic: 72, notes: "Baseline" },
+    { id: "demo-v-3", participantId: "demo-p-1", recordedOn: "2026-10-09", heightCm: 152, weightKg: 44.5, bmi: 19.3, bodyFatPct: 19.5, waistCm: 60, hipCm: 76, chestCm: 70, armCm: 20, thighCm: 41, restingHeartRate: 72, systolic: 108, diastolic: 68, notes: "End of Foundations camp" },
+    { id: "demo-v-2", participantId: "demo-p-1", recordedOn: "2026-10-05", heightCm: 151.5, weightKg: 45, bmi: 19.6, bodyFatPct: 20.4, waistCm: 61, hipCm: 76, chestCm: 70, armCm: 20, thighCm: 41, restingHeartRate: 76, systolic: 110, diastolic: 70, notes: "" },
+    { id: "demo-v-1", participantId: "demo-p-1", recordedOn: "2026-09-01", heightCm: 150, weightKg: 46, bmi: 20.4, bodyFatPct: 21.8, waistCm: 62, hipCm: 77, chestCm: 71, armCm: 21, thighCm: 42, restingHeartRate: 80, systolic: 112, diastolic: 72, notes: "Baseline" },
   ];
   return { camps, participants, registrations, sessions, attendance, vitals };
 }

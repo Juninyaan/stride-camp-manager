@@ -11,16 +11,20 @@ import {
   ageFrom,
   avatarFor,
   bloodTypes,
+  bmiCategory,
+  computeBmi,
   createRegistration,
   formatDate,
   formatDateYear,
   formatMoney,
   fullName,
   initialsOf,
+  isCompletedRegistration,
   loadCampData,
   localDate,
   paymentMethods,
   regularity,
+  registrationView,
   seedData,
   withExpiry,
   type AttendanceRecord,
@@ -62,6 +66,7 @@ function AthleteRecords() {
   const [modal, setModal] = useState<Modal>(null);
   const [selectedId, setSelectedId] = useState(searchParams.get("id") ?? "");
   const [query, setQuery] = useState("");
+  const [campFilter, setCampFilter] = useState(searchParams.get("camp") ?? "");
   const [showAllHistory, setShowAllHistory] = useState(false);
 
   useEffect(() => {
@@ -115,10 +120,23 @@ function AthleteRecords() {
     if (event.target === event.currentTarget) closeModal();
   }
 
+  function syncUrl(id: string, camp: string) {
+    const params = new URLSearchParams();
+    if (id) params.set("id", id);
+    if (camp) params.set("camp", camp);
+    const text = params.toString();
+    window.history.replaceState(null, "", `/participants${text ? `?${text}` : ""}`);
+  }
+
   function selectAthlete(id: string) {
     setSelectedId(id);
     setShowAllHistory(false);
-    window.history.replaceState(null, "", `/participants?id=${id}`);
+    syncUrl(id, campFilter);
+  }
+
+  function changeCampFilter(camp: string) {
+    setCampFilter(camp);
+    syncUrl(selected?.id ?? "", camp);
   }
 
   const today = localDate();
@@ -139,17 +157,19 @@ function AthleteRecords() {
   };
 
   const term = query.trim().toLowerCase();
-  const listed = participants.filter((item) => !term || fullName(item).toLowerCase().includes(term));
-  const selected = participants.find((item) => item.id === selectedId) ?? participants[0];
+  const campMembers = campFilter
+    ? new Set(regs.filter((item) => item.campId === campFilter && item.status !== "withdrawn").map((item) => item.participantId))
+    : null;
+  const listed = participants.filter((item) =>
+    (!campMembers || campMembers.has(item.id)) && (!term || fullName(item).toLowerCase().includes(term)));
+  const selected = participants.find((item) => item.id === selectedId) ?? listed[0] ?? participants[0];
+  const filterCamp = campFilter ? campById.get(campFilter) : undefined;
 
   const athleteRegs = selected
     ? regs.filter((item) => item.participantId === selected.id && item.status !== "withdrawn")
         .sort((a, b) => (campById.get(b.campId)?.startDate ?? "").localeCompare(campById.get(a.campId)?.startDate ?? ""))
     : [];
-  const isCompleted = (registration: Registration) => {
-    const camp = campById.get(registration.campId);
-    return Boolean(camp && registration.paidOn && camp.endDate < today && (registration.status === "registered" || registration.status === "expired"));
-  };
+  const isCompleted = (registration: Registration) => isCompletedRegistration(registration, campById.get(registration.campId), today);
   const campsCompleted = new Set(athleteRegs.filter(isCompleted).map((item) => item.campId)).size;
   const activeCamps = athleteRegs.filter((item) => item.status === "registered" && (campById.get(item.campId)?.endDate ?? "") >= today).length;
   const totalPaid = athleteRegs.filter((item) => item.paidOn && (item.status === "registered" || item.status === "expired")).reduce((sum, item) => sum + item.amount, 0);
@@ -171,10 +191,17 @@ function AthleteRecords() {
 
   const athleteVitals = selected ? vitals.filter((item) => item.participantId === selected.id).sort((a, b) => b.recordedOn.localeCompare(a.recordedOn)) : [];
   const knownHeight = athleteVitals.find((item) => item.heightCm !== null)?.heightCm ?? null;
-  const bmiOf = (record: VitalRecord) => {
-    const height = record.heightCm ?? knownHeight;
-    return record.weightKg && height ? (record.weightKg / ((height / 100) ** 2)).toFixed(1) : "—";
+  const bmiOf = (record: VitalRecord) => record.bmi ?? computeBmi(record.weightKg, record.heightCm ?? knownHeight);
+  const trend = (pick: (record: VitalRecord) => number | null, unit: string) => {
+    const values = athleteVitals.map(pick).filter((value): value is number => value !== null);
+    if (values.length === 0) return { latest: null as number | null, note: "No measurement yet" };
+    if (values.length === 1) return { latest: values[0], note: "First measurement" };
+    const change = Math.round((values[0] - values[1]) * 10) / 10;
+    return { latest: values[0], note: `${change > 0 ? "+" : ""}${change}${unit} since previous` };
   };
+  const bmiTrend = trend(bmiOf, "");
+  const fatTrend = trend((record) => record.bodyFatPct, " pts");
+  const weightTrend = trend((record) => record.weightKg, " kg");
 
   const registerableCamps = selected
     ? camps.filter((camp) => camp.endDate >= today && !registrations.some((item) => item.participantId === selected.id && item.campId === camp.id))
@@ -357,13 +384,22 @@ function AthleteRecords() {
       recordedOn: String(form.get("recordedOn")),
       heightCm: optionalNumber(form.get("heightCm")),
       weightKg: optionalNumber(form.get("weightKg")),
+      bodyFatPct: optionalNumber(form.get("bodyFatPct")),
+      waistCm: optionalNumber(form.get("waistCm")),
+      hipCm: optionalNumber(form.get("hipCm")),
+      chestCm: optionalNumber(form.get("chestCm")),
+      armCm: optionalNumber(form.get("armCm")),
+      thighCm: optionalNumber(form.get("thighCm")),
       restingHeartRate: optionalNumber(form.get("restingHeartRate")),
       systolic: optionalNumber(form.get("systolic")),
       diastolic: optionalNumber(form.get("diastolic")),
       notes: String(form.get("notes") ?? "").trim(),
     };
+    const enteredBmi = optionalNumber(form.get("bmi"));
+    const bmi = enteredBmi ?? computeBmi(values.weightKg, values.heightCm ?? knownHeight);
+    const measured = [values.heightCm, values.weightKg, enteredBmi, values.bodyFatPct, values.waistCm, values.hipCm, values.chestCm, values.armCm, values.thighCm, values.restingHeartRate, values.systolic, values.diastolic];
 
-    if (values.heightCm === null && values.weightKg === null && values.restingHeartRate === null && values.systolic === null && values.diastolic === null) {
+    if (measured.every((value) => value === null)) {
       setFormError("Enter at least one measurement.");
       return;
     }
@@ -378,8 +414,10 @@ function AthleteRecords() {
     if (liveClient) {
       const inserted = await liveClient.from("participant_vitals").insert({
         participant_id: selected.id, recorded_on: values.recordedOn, height_cm: values.heightCm,
-        weight_kg: values.weightKg, resting_heart_rate: values.restingHeartRate,
-        systolic: values.systolic, diastolic: values.diastolic, notes: values.notes || null,
+        weight_kg: values.weightKg, bmi, body_fat_pct: values.bodyFatPct, waist_cm: values.waistCm,
+        hip_cm: values.hipCm, chest_cm: values.chestCm, arm_cm: values.armCm, thigh_cm: values.thighCm,
+        resting_heart_rate: values.restingHeartRate, systolic: values.systolic, diastolic: values.diastolic,
+        notes: values.notes || null,
       }).select("id").single();
       if (inserted.error) {
         setFormError(`Could not save record: ${inserted.error.message}`);
@@ -388,7 +426,7 @@ function AthleteRecords() {
       }
       id = inserted.data.id;
     }
-    setVitals((current) => [{ id, participantId: selected.id, ...values }, ...current]);
+    setVitals((current) => [{ id, participantId: selected.id, bmi, ...values }, ...current]);
     setSaving(false);
     closeModal();
   }
@@ -406,14 +444,7 @@ function AthleteRecords() {
     setVitals((current) => current.filter((item) => item.id !== record.id));
   }
 
-  function paymentView(registration: Registration) {
-    const camp = campById.get(registration.campId);
-    if (isCompleted(registration)) return { label: "Completed", cls: "pay-completed", detail: `Camp ended ${formatDateYear(camp?.endDate ?? today)}` };
-    if (registration.status === "registered") return { label: "Paid", cls: "pay-paid", detail: `Valid until ${formatDateYear(registration.expiresOn)}` };
-    if (registration.status === "expired") return { label: "Expired", cls: "pay-expired", detail: `Expired ${formatDateYear(registration.expiresOn)} — removed from roster` };
-    if (registration.status === "waitlisted") return { label: "Waitlisted", cls: "pay-waitlisted", detail: "Camp was full when registered" };
-    return { label: "Not paid", cls: "pay-unpaid", detail: `${formatMoney(registration.amount)} due to confirm the place` };
-  }
+  const paymentView = (registration: Registration) => registrationView(registration, campById.get(registration.campId), today);
 
   const age = selected ? ageFrom(selected.dateOfBirth, today) : null;
   const attentionNotes = selected ? [selected.allergies && `Allergies: ${selected.allergies}`, selected.conditions && `Conditions: ${selected.conditions}`].filter(Boolean) : [];
@@ -432,7 +463,7 @@ function AthleteRecords() {
             <h1>Athlete records</h1>
             <p>Select an athlete to see their camps, payments, health records and attendance.</p>
           </div>
-          <Link className="secondary-button" href="/">Back to overview</Link>
+          {filterCamp ? <Link className="secondary-button" href={`/camps?id=${filterCamp.id}`}>Back to {filterCamp.name}</Link> : <Link className="secondary-button" href="/">Back to overview</Link>}
         </section>
 
         {pageError && <p className="camp-alert" role="alert">{pageError}</p>}
@@ -440,15 +471,25 @@ function AthleteRecords() {
 
         <div className="athlete-layout">
           <aside className="panel athlete-list-panel" aria-label="Athletes">
+            <label className="filter-select">Filter by camp
+              <select value={campFilter} onChange={(event) => changeCampFilter(event.target.value)}>
+                <option value="">All camps</option>
+                {camps.map((camp) => <option key={camp.id} value={camp.id}>{camp.name}</option>)}
+              </select>
+            </label>
             <label className="participant-search athlete-search"><Search size={14} /><input aria-label="Search athletes" placeholder="Search athletes..." value={query} onChange={(event) => setQuery(event.target.value)} /></label>
             <div className="athlete-list">
-              {listed.length === 0 && <div className="empty-state">{dataLoading ? "Loading…" : participants.length === 0 ? "No athletes yet. Add one from the overview page." : "No athletes match that search."}</div>}
-              {listed.map((athlete) => (
-                <button className={`athlete-item ${selected?.id === athlete.id ? "athlete-item-active" : ""}`} key={athlete.id} onClick={() => selectAthlete(athlete.id)} type="button">
-                  <span className={`athlete-avatar ${avatarFor(fullName(athlete))}`}>{initialsOf(athlete)}</span>
-                  <span className="athlete-item-copy"><strong>{fullName(athlete)}</strong><span>{statusOf(athlete.id)}</span></span>
-                </button>
-              ))}
+              {listed.length === 0 && <div className="empty-state">{dataLoading ? "Loading…" : participants.length === 0 ? "No athletes yet. Add one from the overview page." : campFilter ? "No athletes in this camp match." : "No athletes match that search."}</div>}
+              {listed.map((athlete) => {
+                const membership = campFilter ? regs.find((item) => item.participantId === athlete.id && item.campId === campFilter && item.status !== "withdrawn") : undefined;
+                const membershipView = membership ? registrationView(membership, filterCamp, today) : undefined;
+                return (
+                  <button className={`athlete-item ${selected?.id === athlete.id ? "athlete-item-active" : ""}`} key={athlete.id} onClick={() => selectAthlete(athlete.id)} type="button">
+                    <span className={`athlete-avatar ${avatarFor(fullName(athlete))}`}>{initialsOf(athlete)}</span>
+                    <span className="athlete-item-copy"><strong>{fullName(athlete)}</strong>{membershipView ? <span className={`pay-badge ${membershipView.cls}`}>{membershipView.label}</span> : <span>{statusOf(athlete.id)}</span>}</span>
+                  </button>
+                );
+              })}
             </div>
           </aside>
 
@@ -505,7 +546,7 @@ function AthleteRecords() {
                           const completed = isCompleted(registration);
                           return (
                             <tr key={registration.id}>
-                              <td><strong className="cell-title">{camp?.name ?? "Camp"}</strong><span className="cell-sub">{camp ? `${formatDate(camp.startDate)} – ${formatDate(camp.endDate)} · ${camp.location}` : ""}</span></td>
+                              <td><strong className="cell-title">{camp ? <Link className="inline-link" href={`/camps?id=${camp.id}`}>{camp.name}</Link> : "Camp"}</strong><span className="cell-sub">{camp ? `${formatDate(camp.startDate)} – ${formatDate(camp.endDate)} · ${camp.location}` : ""}</span></td>
                               <td>{registration.amount > 0 ? formatMoney(registration.amount) : "Free"}</td>
                               <td><span className={`pay-badge ${view.cls}`}>{view.label}</span><span className="cell-sub">{view.detail}{registration.paidOn && registration.status !== "pending" ? ` · paid ${formatDateYear(registration.paidOn)}${registration.paymentMethod ? ` (${registration.paymentMethod})` : ""}` : ""}</span></td>
                               <td>
@@ -558,17 +599,25 @@ function AthleteRecords() {
                     <button className="secondary-button small-button" type="button" onClick={() => openModal({ type: "vital" })}><Plus size={14} />Add record</button>
                   </div>
                   {athleteVitals.length === 0 ? (
-                    <div className="empty-state"><HeartPulse size={18} /> No measurements yet. Add height, weight, resting heart rate or blood pressure.</div>
+                    <div className="empty-state"><HeartPulse size={18} /> No measurements yet. Add weight, body fat %, BMI, body measurements, resting heart rate or blood pressure.</div>
                   ) : (
+                    <>
+                    <div className="vital-summary">
+                      <div className="vital-tile"><span>BMI</span><strong>{bmiTrend.latest ?? "—"}</strong><em>{bmiCategory(bmiTrend.latest, age)}</em><small>{bmiTrend.note}</small></div>
+                      <div className="vital-tile"><span>Body fat</span><strong>{fatTrend.latest !== null ? `${fatTrend.latest}%` : "—"}</strong><small>{fatTrend.note}</small></div>
+                      <div className="vital-tile"><span>Weight</span><strong>{weightTrend.latest !== null ? `${weightTrend.latest} kg` : "—"}</strong><small>{weightTrend.note}</small></div>
+                    </div>
                     <div className="participant-table-wrap">
                       <table className="participant-table">
-                        <thead><tr><th>DATE</th><th>HEIGHT</th><th>WEIGHT</th><th>BMI</th><th>RESTING HR</th><th>BLOOD PRESSURE</th><th>NOTES</th><th><span className="sr-only">Actions</span></th></tr></thead>
+                        <thead><tr><th>DATE</th><th>HEIGHT</th><th>WEIGHT</th><th>BMI</th><th>BODY FAT</th><th>MEASUREMENTS (CM)</th><th>RESTING HR</th><th>BLOOD PRESSURE</th><th>NOTES</th><th><span className="sr-only">Actions</span></th></tr></thead>
                         <tbody>{athleteVitals.map((record) => (
                           <tr key={record.id}>
                             <td>{formatDateYear(record.recordedOn)}</td>
                             <td>{record.heightCm !== null ? `${record.heightCm} cm` : "—"}</td>
                             <td>{record.weightKg !== null ? `${record.weightKg} kg` : "—"}</td>
-                            <td>{bmiOf(record)}</td>
+                            <td>{bmiOf(record) ?? "—"}</td>
+                            <td>{record.bodyFatPct !== null ? `${record.bodyFatPct}%` : "—"}</td>
+                            <td className="cell-wrap">{[["Waist", record.waistCm], ["Hip", record.hipCm], ["Chest", record.chestCm], ["Arm", record.armCm], ["Thigh", record.thighCm]].filter(([, value]) => value !== null).map(([label, value]) => `${label} ${value}`).join(" · ") || "—"}</td>
                             <td>{record.restingHeartRate !== null ? `${record.restingHeartRate} bpm` : "—"}</td>
                             <td>{record.systolic !== null && record.diastolic !== null ? `${record.systolic}/${record.diastolic}` : "—"}</td>
                             <td className="cell-wrap">{record.notes || "—"}</td>
@@ -577,6 +626,7 @@ function AthleteRecords() {
                         ))}</tbody>
                       </table>
                     </div>
+                    </>
                   )}
                 </section>
 
@@ -593,7 +643,7 @@ function AthleteRecords() {
                             <tr key={`${item.sessionId}-${item.participantId}`}>
                               <td>{formatDateYear(item.session.date)}</td>
                               <td>{item.session.title}</td>
-                              <td>{campById.get(item.session.campId)?.name ?? "—"}</td>
+                              <td>{campById.get(item.session.campId) ? <Link className="inline-link" href={`/camps?id=${item.session.campId}`}>{campById.get(item.session.campId)?.name}</Link> : "—"}</td>
                               <td><span className={`attend-badge attend-${item.status}`}>{item.status === "present" ? "Present" : item.status === "absent" ? "Absent" : "Excused"}</span></td>
                             </tr>
                           ))}</tbody>
@@ -657,6 +707,11 @@ function AthleteRecords() {
             <form className="camp-form" onSubmit={saveVital}>
               <label>Date<input defaultValue={today} max={today} name="recordedOn" type="date" required /></label>
               <div className="form-row"><label>Height (cm)<input autoFocus name="heightCm" type="number" step="0.1" min="30" max="260" /></label><label>Weight (kg)<input name="weightKg" type="number" step="0.1" min="5" max="400" /></label></div>
+              <div className="form-row"><label>Body fat (%)<input name="bodyFatPct" type="number" step="0.1" min="1" max="70" /></label><label>BMI<input name="bmi" type="number" step="0.1" min="5" max="80" placeholder="Auto from height & weight" /></label></div>
+              <p className="field-hint">Leave BMI blank to calculate it from height and weight (the latest known height is used if you don&apos;t enter one).</p>
+              <div className="form-row"><label>Waist (cm)<input name="waistCm" type="number" step="0.1" min="20" max="250" /></label><label>Hip (cm)<input name="hipCm" type="number" step="0.1" min="20" max="250" /></label></div>
+              <div className="form-row"><label>Chest (cm)<input name="chestCm" type="number" step="0.1" min="20" max="250" /></label><label>Arm (cm)<input name="armCm" type="number" step="0.1" min="5" max="100" /></label></div>
+              <label>Thigh (cm)<input name="thighCm" type="number" step="0.1" min="10" max="150" /></label>
               <label>Resting heart rate (bpm)<input name="restingHeartRate" type="number" min="20" max="250" /></label>
               <div className="form-row"><label>Blood pressure — systolic<input name="systolic" type="number" min="50" max="260" /></label><label>Diastolic<input name="diastolic" type="number" min="30" max="160" /></label></div>
               <label>Notes<input name="notes" placeholder="Optional" maxLength={300} /></label>
