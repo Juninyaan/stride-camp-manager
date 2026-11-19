@@ -5,11 +5,13 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSupabase } from "@/lib/supabase-context";
 import { AppShell } from "@/components/app-shell";
+import { SessionImport } from "@/components/session-import";
 import { Activity, Ban, CalendarDays, Check, Clock3, Copy, MapPin, Plus, RotateCcw, Tag, Users, X } from "lucide-react";
 import {
   addDays,
   avatarFor,
   campDays,
+  defaultSessionDays,
   formatDate,
   formatDateYear,
   formatLongDate,
@@ -59,7 +61,7 @@ const stateLabels: Record<SessionState, string> = { cancelled: "Cancelled", done
 function buildWeeks(camp: Camp) {
   const weeks: string[][] = [];
   const last = addDays(startOfWeek(camp.endDate), 6);
-  for (let weekStart = startOfWeek(camp.startDate); weekStart <= last && weeks.length < 20; weekStart = addDays(weekStart, 7)) {
+  for (let weekStart = startOfWeek(camp.startDate); weekStart <= last; weekStart = addDays(weekStart, 7)) {
     weeks.push(Array.from({ length: 7 }, (_, index) => addDays(weekStart, index)));
   }
   return weeks;
@@ -149,6 +151,23 @@ function CampRoster() {
     window.history.replaceState(null, "", `/camps?id=${id}`);
   }
 
+  async function setSuccessor(camp: Camp, nextCampId: string) {
+    setPageError("");
+    setNotice("");
+    setSaving(true);
+    if (liveClient) {
+      const { error } = await liveClient.from("camps").update({ next_camp_id: nextCampId || null }).eq("id", camp.id);
+      if (error) {
+        setPageError(`Could not update the next camp: ${error.message}`);
+        setSaving(false);
+        return;
+      }
+    }
+    setCamps((current) => current.map((item) => item.id === camp.id ? { ...item, nextCampId } : item));
+    setNotice(nextCampId ? "Next camp saved. Active athletes will roll over after this camp ends." : "Automatic rollover removed.");
+    setSaving(false);
+  }
+
   const today = localDate();
   const regs = registrations.map((registration) => withExpiry(registration, today));
   const participantById = new Map(participants.map((item) => [item.id, item]));
@@ -162,7 +181,7 @@ function CampRoster() {
   const campRegs = selected ? regs.filter((item) => item.campId === selected.id && item.status !== "withdrawn") : [];
   const countOf = (status: Registration["status"]) => campRegs.filter((item) => item.status === status).length;
   const enrolled = countOf("registered");
-  const awaiting = campRegs.filter((item) => item.status === "pending");
+  const awaiting = campRegs.filter((item) => item.paymentStatus !== "paid");
   const collected = campRegs.filter((item) => item.paidOn && (item.status === "registered" || item.status === "expired")).reduce((sum, item) => sum + item.amount, 0);
   const outstanding = awaiting.reduce((sum, item) => sum + item.amount, 0);
 
@@ -197,7 +216,7 @@ function CampRoster() {
   };
 
   const rows = campRegs
-    .filter((item) => filter === "all" || item.status === filter)
+    .filter((item) => filter === "all" || (filter === "registered" ? item.paymentStatus === "paid" : filter === "pending" ? item.paymentStatus === "unpaid" : filter === "expired" ? item.paymentStatus === "expired" : item.status === filter))
     .map((registration) => {
       const athlete = participantById.get(registration.participantId);
       const marks = campAttendance.filter((item) => item.participantId === registration.participantId);
@@ -216,13 +235,12 @@ function CampRoster() {
     : "";
   const chips: { value: StatusFilter; label: string; count: number }[] = [
     { value: "all", label: "All", count: campRegs.length },
-    { value: "registered", label: "Paid", count: enrolled },
-    { value: "pending", label: "Not paid", count: awaiting.length },
+    { value: "registered", label: "Paid", count: campRegs.filter((item) => item.paymentStatus === "paid").length },
+    { value: "pending", label: "Not paid", count: campRegs.filter((item) => item.paymentStatus === "unpaid").length },
     { value: "waitlisted", label: "Waitlisted", count: countOf("waitlisted") },
-    { value: "expired", label: "Expired / completed", count: countOf("expired") },
+    { value: "expired", label: "Expired", count: campRegs.filter((item) => item.paymentStatus === "expired").length },
   ];
 
-  // Everyone who should be on a session's attendance sheet: paid athletes plus anyone already recorded.
   const rosterFor = (target: CampSession) => {
     const recorded = new Set(attendance.filter((item) => item.sessionId === target.id).map((item) => item.participantId));
     return participants
@@ -384,11 +402,14 @@ function CampRoster() {
       }
     }
 
-    const existing = new Set(campSessions.map((item) => `${item.date}|${item.startTime}|${item.title.toLowerCase()}`));
-    const dates = [...multiDays].sort().filter((day) => !existing.has(`${day}|${values.startTime}|${values.title.toLowerCase()}`));
+    const source = modal?.type === "multi" ? modal.source : undefined;
+    const existing = new Set(campSessions.map((item) =>
+      `${item.date}|${item.startTime}${source ? `|${item.title.toLowerCase()}` : ""}`));
+    const dates = [...multiDays].sort().filter((day) =>
+      !existing.has(`${day}|${values.startTime}${source ? `|${values.title.toLowerCase()}` : ""}`));
     const skipped = multiDays.length - dates.length;
     if (dates.length === 0) {
-      setFormError("Every selected day already has this session at the same time.");
+      setFormError(`All ${skipped} selected days already have matching sessions at that time.`);
       return;
     }
 
@@ -465,7 +486,7 @@ function CampRoster() {
   }
 
   function openMulti(source?: CampSession) {
-    setMultiDays(source ? [] : days);
+    setMultiDays(source || !selected ? [] : defaultSessionDays(selected));
     openModal({ type: "multi", source });
   }
 
@@ -509,7 +530,7 @@ function CampRoster() {
                   <button className={`athlete-item camp-item ${selected?.id === camp.id ? "athlete-item-active" : ""}`} key={camp.id} onClick={() => selectCamp(camp.id)} type="button">
                     <span className="athlete-item-copy">
                       <strong>{camp.name}</strong>
-                      <span>{formatDate(camp.startDate)} – {formatDate(camp.endDate)} · {paid}/{camp.capacity} paid{camp.endDate < today ? " · ended" : ""}</span>
+                      <span>{formatDate(camp.startDate)} – {formatDate(camp.endDate)} · {paid}/{camp.capacity} active{camp.endDate < today ? " · ended" : ""}</span>
                     </span>
                   </button>
                 );
@@ -535,9 +556,22 @@ function CampRoster() {
                   <Link className="secondary-button" href={`/participants?camp=${selected.id}`}>Open in athlete records</Link>
                 </section>
 
+                <section className="panel detail-panel">
+                  <div className="camp-form">
+                    <label>Next monthly camp
+                      <select value={selected.nextCampId ?? ""} disabled={saving || Boolean(selected.rolledOverAt)} onChange={(event) => setSuccessor(selected, event.target.value)}>
+                        <option value="">No automatic rollover</option>
+                        {camps.filter((camp) => camp.id !== selected.id && camp.startDate > selected.endDate)
+                          .map((camp) => <option key={camp.id} value={camp.id}>{camp.name} ({camp.startDate} – {camp.endDate})</option>)}
+                      </select>
+                    </label>
+                    <p className="field-hint">{selected.rolledOverAt ? "Rollover has already run; the link is locked." : "After this camp ends, active athletes move to the linked camp as unpaid; overflow is waitlisted. Existing registrations and history are retained. Background scheduling must be configured in Supabase."}</p>
+                  </div>
+                </section>
+
                 <section className="stats-grid" aria-label="Camp summary">
                   <article className="stat-card">
-                    <div className="stat-top"><span>Paid places</span><span className="stat-icon stat-icon-mint"><Users size={17} /></span></div>
+                    <div className="stat-top"><span>Active places</span><span className="stat-icon stat-icon-mint"><Users size={17} /></span></div>
                     <div className="stat-value">{enrolled}<span className="stat-unit">/ {selected.capacity}</span></div>
                     <p className="stat-foot">{countOf("waitlisted")} waitlisted</p>
                   </article>
@@ -549,7 +583,7 @@ function CampRoster() {
                   <article className="stat-card">
                     <div className="stat-top"><span>Collected</span><span className="stat-icon stat-icon-lavender"><Tag size={17} /></span></div>
                     <div className="stat-value stat-value-small">{formatMoney(collected)}</div>
-                    <p className="stat-foot">{countOf("expired")} expired / completed</p>
+                    <p className="stat-foot">{campRegs.filter((item) => item.paymentStatus === "expired").length} payments expired</p>
                   </article>
                   <article className="stat-card">
                     <div className="stat-top"><span>Attendance</span><span className="stat-icon stat-icon-peach"><Activity size={17} /></span></div>
@@ -566,6 +600,7 @@ function CampRoster() {
                       <button className="primary-button small-button" type="button" onClick={() => openModal({ type: "session", date: activeDay })}><Plus size={14} />Add session</button>
                     </div>
                   </div>
+                  <SessionImport key={selected.id} camp={selected} sessions={campSessions} client={liveClient} onImported={(items) => setSessions((current) => [...current, ...items])} />
                   {nextSession && (
                     <div className="next-callout">
                       <Clock3 size={16} />
@@ -757,8 +792,21 @@ function CampRoster() {
             <div className="modal-heading"><div><span className="modal-icon"><Copy size={18} /></span><h2 id="multi-title">{multiSource ? "Duplicate session" : "Add sessions on several days"}</h2><p>{multiSource ? `Copy “${multiSource.title}” to other days of ${selected.name}.` : `Schedule the same session on days of ${selected.name}.`}</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
             <form className="camp-form" onSubmit={saveMulti}>
               <label>Session title<input autoFocus defaultValue={multiSource?.title} name="title" placeholder="e.g. Morning training" required maxLength={120} /></label>
-              <div className="form-row"><label>Start time<input defaultValue={multiSource?.startTime} name="startTime" type="time" required /></label><label>End time<input defaultValue={multiSource?.endTime} name="endTime" type="time" required /></label></div>
+              <div className="form-row"><label>Start time<input defaultValue={multiSource?.startTime ?? "20:00"} name="startTime" type="time" required /></label><label>End time<input defaultValue={multiSource?.endTime ?? "21:00"} name="endTime" type="time" required /></label></div>
               <div>
+                <div className="day-picker-head">
+                  <span>Select weekdays</span>
+                  <span className="day-picker-tools">
+                    {weekdayHeads.map((weekday, index) => (
+                      <button className="text-link" type="button" key={weekday} onClick={() => {
+                        const weekdayDays = days.filter((day) => (new Date(`${day}T12:00:00`).getDay() + 6) % 7 === index);
+                        setMultiDays((current) => weekdayDays.every((day) => current.includes(day))
+                          ? current.filter((day) => !weekdayDays.includes(day))
+                          : [...new Set([...current, ...weekdayDays])]);
+                      }}>{weekday}</button>
+                    ))}
+                  </span>
+                </div>
                 <div className="day-picker-head">
                   <span>Days ({multiDays.length} selected)</span>
                   <span className="day-picker-tools">
@@ -775,7 +823,7 @@ function CampRoster() {
                     </label>
                   ))}
                 </div>
-                <p className="field-hint">Days that already have this session at the same time are skipped. Attendance is not copied.</p>
+                <p className="field-hint">{multiSource ? "Days that already have this session at the same time" : "Days that already have a session at the same start time"} are skipped. Attendance is not copied.</p>
               </div>
               {formError && <p className="camp-alert" role="alert">{formError}</p>}
               <div className="modal-actions"><button className="secondary-button" onClick={closeModal} type="button">Cancel</button><button className="primary-button" disabled={saving} type="submit">{saving ? "Saving…" : <><Plus size={17} />{multiSource ? "Duplicate" : "Add sessions"}</>}</button></div>
@@ -790,7 +838,7 @@ function CampRoster() {
           <section aria-labelledby="attendance-title" aria-modal="true" className="camp-modal attendance-modal" role="dialog">
             <div className="modal-heading"><div><span className="modal-icon"><Check size={18} /></span><h2 id="attendance-title">{attendanceSession.title}</h2><p>{formatLongDate(attendanceSession.date)} · {formatTime(attendanceSession.startTime).time} {formatTime(attendanceSession.startTime).period} – {formatTime(attendanceSession.endTime).time} {formatTime(attendanceSession.endTime).period}</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
             {attendanceRoster.length === 0 ? (
-              <div className="empty-state">No paid athletes are registered in this camp yet. Record a payment on an athlete&apos;s record to confirm their place.</div>
+              <div className="empty-state">No active athletes are registered in this camp yet.</div>
             ) : (
               <>
                 <div className="attendance-tools attendance-tools-wide">

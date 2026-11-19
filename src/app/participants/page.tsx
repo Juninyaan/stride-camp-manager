@@ -5,6 +5,7 @@ import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { useSupabase } from "@/lib/supabase-context";
 import { AppShell } from "@/components/app-shell";
+import { ParticipantImport } from "@/components/participant-import";
 import { Activity, ArrowRight, CalendarDays, Check, HeartPulse, Plus, Search, Tag, UserPlus, X } from "lucide-react";
 import {
   addDays,
@@ -166,14 +167,14 @@ function AthleteRecords() {
   const filterCamp = campFilter ? campById.get(campFilter) : undefined;
 
   const athleteRegs = selected
-    ? regs.filter((item) => item.participantId === selected.id && item.status !== "withdrawn")
+    ? regs.filter((item) => item.participantId === selected.id)
         .sort((a, b) => (campById.get(b.campId)?.startDate ?? "").localeCompare(campById.get(a.campId)?.startDate ?? ""))
     : [];
   const isCompleted = (registration: Registration) => isCompletedRegistration(registration, campById.get(registration.campId), today);
   const campsCompleted = new Set(athleteRegs.filter(isCompleted).map((item) => item.campId)).size;
   const activeCamps = athleteRegs.filter((item) => item.status === "registered" && (campById.get(item.campId)?.endDate ?? "") >= today).length;
-  const totalPaid = athleteRegs.filter((item) => item.paidOn && (item.status === "registered" || item.status === "expired")).reduce((sum, item) => sum + item.amount, 0);
-  const outstanding = athleteRegs.filter((item) => item.status === "pending").reduce((sum, item) => sum + item.amount, 0);
+  const totalPaid = athleteRegs.filter((item) => item.paidOn).reduce((sum, item) => sum + item.amount, 0);
+  const outstanding = athleteRegs.filter((item) => item.status !== "withdrawn" && item.paymentStatus !== "paid").reduce((sum, item) => sum + item.amount, 0);
 
   const history = selected
     ? attendance
@@ -204,7 +205,7 @@ function AthleteRecords() {
   const weightTrend = trend((record) => record.weightKg, " kg");
 
   const registerableCamps = selected
-    ? camps.filter((camp) => camp.endDate >= today && !registrations.some((item) => item.participantId === selected.id && item.campId === camp.id))
+    ? camps.filter((camp) => camp.endDate >= today && !registrations.some((item) => item.participantId === selected.id && item.campId === camp.id && item.status !== "withdrawn"))
     : [];
   const paymentRegistration = modal?.type === "payment" ? athleteRegs.find((item) => item.id === modal.registrationId) : undefined;
   const paymentCamp = paymentRegistration ? campById.get(paymentRegistration.campId) : undefined;
@@ -223,35 +224,27 @@ function AthleteRecords() {
 
     setSaving(true);
     setPageError("");
-    const result = await createRegistration(liveClient, camp, enrolledByCamp.get(camp.id) ?? 0, selected.id);
-    if (result.registration) setRegistrations((current) => [...current, result.registration!]);
-    else setPageError(`Could not register athlete: ${result.error}`);
+    const previous = registrations.find((item) => item.participantId === selected.id && item.campId === camp.id && item.status === "withdrawn");
+    if (previous) {
+      const status = (enrolledByCamp.get(camp.id) ?? 0) >= camp.capacity ? "waitlisted" : "registered";
+      const failure = await updateRegistration(previous, { status });
+      if (failure) setPageError(`Could not register athlete: ${failure}`);
+      else setRegistrations((current) => current.map((item) => item.id === previous.id ? { ...item, status } : item));
+    } else {
+      const result = await createRegistration(liveClient, camp, enrolledByCamp.get(camp.id) ?? 0, selected.id);
+      if (result.registration) setRegistrations((current) => [...current, result.registration!]);
+      else setPageError(`Could not register athlete: ${result.error}`);
+    }
     setSaving(false);
   }
 
   async function removeFromCamp(registration: Registration) {
     const campName = campById.get(registration.campId)?.name ?? "this camp";
-    if (!window.confirm(`Remove this athlete from “${campName}”? Their payment record and attendance for its sessions will also be removed.`)) return;
+    if (!window.confirm(`Mark this athlete inactive in “${campName}”? Payment and attendance history will be retained.`)) return;
     setPageError("");
-    const campSessionIds = sessions.filter((item) => item.campId === registration.campId).map((item) => item.id);
-    if (liveClient) {
-      if (campSessionIds.length) {
-        const cleared = await liveClient.from("attendance").delete()
-          .eq("participant_id", registration.participantId).in("session_id", campSessionIds);
-        if (cleared.error) {
-          setPageError(`Could not remove athlete from camp: ${cleared.error.message}`);
-          return;
-        }
-      }
-      const { error } = await liveClient.from("camp_registrations").delete().eq("id", registration.id);
-      if (error) {
-        setPageError(`Could not remove athlete from camp: ${error.message}`);
-        return;
-      }
-    }
-    setRegistrations((current) => current.filter((item) => item.id !== registration.id));
-    setAttendance((current) => current.filter((item) =>
-      !(item.participantId === registration.participantId && campSessionIds.includes(item.sessionId))));
+    const failure = await updateRegistration(registration, { status: "withdrawn" });
+    if (failure) { setPageError(`Could not remove athlete from camp: ${failure}`); return; }
+    setRegistrations((current) => current.map((item) => item.id === registration.id ? { ...item, status: "withdrawn" } : item));
   }
 
   async function savePayment(event: FormEvent<HTMLFormElement>) {
@@ -274,7 +267,7 @@ function AthleteRecords() {
       setFormError("The valid-until date has already passed, so the registration would expire immediately.");
       return;
     }
-    if (paymentRegistration.status !== "registered" && (enrolledByCamp.get(paymentCamp.id) ?? 0) >= paymentCamp.capacity) {
+    if (paymentRegistration.status !== "registered" && paymentRegistration.status !== "waitlisted" && (enrolledByCamp.get(paymentCamp.id) ?? 0) >= paymentCamp.capacity) {
       setFormError("This camp is full. Free up a place or increase the camp capacity before recording this payment.");
       return;
     }
@@ -282,7 +275,7 @@ function AthleteRecords() {
     setSaving(true);
     setFormError("");
     const failure = await updateRegistration(paymentRegistration, {
-      status: "registered", payment_status: "paid", amount: values.amount,
+      status: paymentRegistration.status === "waitlisted" ? "waitlisted" : "registered", payment_status: "paid", amount: values.amount,
       paid_at: new Date(`${values.paidOn}T12:00:00`).toISOString(), expires_on: values.expiresOn,
       payment_method: values.paymentMethod || null, payment_reference: values.paymentReference || null,
     });
@@ -292,24 +285,24 @@ function AthleteRecords() {
       return;
     }
     setRegistrations((current) => current.map((item) => item.id === paymentRegistration.id
-      ? { ...item, status: "registered", paymentStatus: "paid", ...values }
+      ? { ...item, status: item.status === "waitlisted" ? "waitlisted" : "registered", paymentStatus: "paid", ...values }
       : item));
     setSaving(false);
     closeModal();
   }
 
   async function undoPayment(registration: Registration) {
-    if (!window.confirm("Mark this registration as not paid? The athlete will leave the camp roster until payment is recorded again.")) return;
+    if (!window.confirm("Mark this registration as not paid? The athlete's enrollment will remain unchanged.")) return;
     setPageError("");
     const failure = await updateRegistration(registration, {
-      status: "pending", payment_status: "unpaid", paid_at: null, expires_on: null, payment_method: null, payment_reference: null,
+      payment_status: "unpaid", paid_at: null, expires_on: null, payment_method: null, payment_reference: null,
     });
     if (failure) {
       setPageError(`Could not update payment: ${failure}`);
       return;
     }
     setRegistrations((current) => current.map((item) => item.id === registration.id
-      ? { ...item, status: "pending", paymentStatus: "unpaid", paidOn: "", expiresOn: "", paymentMethod: "", paymentReference: "" }
+      ? { ...item, paymentStatus: "unpaid", paidOn: "", expiresOn: "", paymentMethod: "", paymentReference: "" }
       : item));
   }
 
@@ -469,6 +462,13 @@ function AthleteRecords() {
         {pageError && <p className="camp-alert" role="alert">{pageError}</p>}
         {dataLoading && <p className="camp-alert camp-alert-info" role="status">Loading your data…</p>}
 
+        <ParticipantImport client={liveClient} camps={camps} participants={participants} registrations={registrations} onImported={async () => {
+          if (!liveClient) throw new Error("Sign in before importing.");
+          const data = await loadCampData(liveClient);
+          setCamps(data.camps); setParticipants(data.participants); setRegistrations(data.registrations);
+          setSessions(data.sessions); setAttendance(data.attendance); setVitals(data.vitals);
+        }} />
+
         <div className="athlete-layout">
           <aside className="panel athlete-list-panel" aria-label="Athletes">
             <label className="filter-select">Filter by camp
@@ -532,7 +532,7 @@ function AthleteRecords() {
 
                 <section className="panel detail-panel" id="camps-payments">
                   <div className="panel-heading">
-                    <div><h2>Camps &amp; payments</h2><p>A paid place is valid until its expiry date, then the athlete leaves the camp automatically.</p></div>
+                    <div><h2>Camps &amp; payments</h2><p>Payment expiry does not remove an athlete from the camp.</p></div>
                   </div>
                   {athleteRegs.length === 0 ? (
                     <div className="empty-state">Not registered for any camp yet.</div>
@@ -551,9 +551,9 @@ function AthleteRecords() {
                               <td><span className={`pay-badge ${view.cls}`}>{view.label}</span><span className="cell-sub">{view.detail}{registration.paidOn && registration.status !== "pending" ? ` · paid ${formatDateYear(registration.paidOn)}${registration.paymentMethod ? ` (${registration.paymentMethod})` : ""}` : ""}</span></td>
                               <td>
                                 <div className="row-actions">
-                                  {!completed && registration.status !== "registered" && <button className="row-edit" type="button" onClick={() => openModal({ type: "payment", registrationId: registration.id })}>{registration.status === "expired" ? "Renew" : "Record payment"}</button>}
-                                  {!completed && registration.status === "registered" && registration.amount > 0 && <button className="row-delete" type="button" onClick={() => undoPayment(registration)}>Undo payment</button>}
-                                  {!completed && <button className="row-delete" type="button" aria-label={`Remove from ${camp?.name ?? "camp"}`} onClick={() => removeFromCamp(registration)}>Remove</button>}
+                                  {registration.status !== "withdrawn" && registration.paymentStatus !== "paid" && <button className="row-edit" type="button" onClick={() => openModal({ type: "payment", registrationId: registration.id })}>{registration.paymentStatus === "expired" ? "Renew" : "Record payment"}</button>}
+                                  {registration.status !== "withdrawn" && !completed && registration.paymentStatus === "paid" && registration.amount > 0 && <button className="row-delete" type="button" onClick={() => undoPayment(registration)}>Undo payment</button>}
+                                  {registration.status !== "withdrawn" && <button className="row-delete" type="button" aria-label={`Remove from ${camp?.name ?? "camp"}`} onClick={() => removeFromCamp(registration)}>Remove</button>}
                                 </div>
                               </td>
                             </tr>

@@ -14,6 +14,8 @@ export type Camp = {
   ageGroup: string;
   capacity: number;
   price: number;
+  nextCampId?: string;
+  rolledOverAt?: string;
 };
 export type Participant = {
   id: string;
@@ -187,30 +189,32 @@ export function bmiCategory(bmi: number | null, age: number | null) {
 }
 
 export function isCompletedRegistration(registration: Registration, camp: Camp | undefined, today: string) {
-  return Boolean(camp && registration.paidOn && camp.endDate < today &&
+  return Boolean(camp && registration.paidOn && registration.paymentStatus === "paid" && camp.endDate < today &&
     (registration.status === "registered" || registration.status === "expired"));
 }
 
 export function registrationView(registration: Registration, camp: Camp | undefined, today: string) {
+  if (registration.status === "withdrawn") {
+    return { label: "Inactive", cls: "pay-expired", detail: "Withdrawn from this camp" };
+  }
   if (isCompletedRegistration(registration, camp, today)) {
     return { label: "Completed", cls: "pay-completed", detail: `Camp ended ${formatDateYear(camp?.endDate ?? today)}` };
   }
-  if (registration.status === "registered") {
+  if (registration.status === "waitlisted") {
+    return { label: "Waitlisted", cls: "pay-waitlisted", detail: `Camp is full · ${registration.paymentStatus === "paid" ? "paid" : "payment due"}` };
+  }
+  if (registration.paymentStatus === "paid") {
     return { label: "Paid", cls: "pay-paid", detail: `Valid until ${formatDateYear(registration.expiresOn)}` };
   }
-  if (registration.status === "expired") {
-    return { label: "Expired", cls: "pay-expired", detail: `Expired ${formatDateYear(registration.expiresOn)} — removed from roster` };
+  if (registration.paymentStatus === "expired") {
+    return { label: "Expired", cls: "pay-expired", detail: `Payment expired ${formatDateYear(registration.expiresOn)} · enrollment unchanged` };
   }
-  if (registration.status === "waitlisted") {
-    return { label: "Waitlisted", cls: "pay-waitlisted", detail: "Camp was full when registered" };
-  }
-  return { label: "Not paid", cls: "pay-unpaid", detail: `${formatMoney(registration.amount)} due to confirm the place` };
+  return { label: "Not paid", cls: "pay-unpaid", detail: `${formatMoney(registration.amount)} due${registration.status === "registered" ? " · active" : ""}` };
 }
 
-// A paid registration whose valid-until date has passed is treated as expired (removed from the roster).
 export function withExpiry(registration: Registration, today: string): Registration {
-  if (registration.status === "registered" && registration.expiresOn && registration.expiresOn < today) {
-    return { ...registration, status: "expired", paymentStatus: "expired" };
+  if (registration.paymentStatus === "paid" && registration.expiresOn && registration.expiresOn < today) {
+    return { ...registration, paymentStatus: "expired" };
   }
   return registration;
 }
@@ -219,7 +223,7 @@ export function startingRegistration(camp: Camp, enrolled: number): Omit<Registr
   const full = enrolled >= camp.capacity;
   const free = camp.price <= 0 && !full;
   return {
-    status: full ? "waitlisted" : free ? "registered" : "pending",
+    status: full ? "waitlisted" : "registered",
     paymentStatus: free ? "paid" : "unpaid",
     amount: camp.price,
     paidOn: free ? localDate() : "",
@@ -264,11 +268,11 @@ function describeLoadError(message: string) {
 }
 
 export async function loadCampData(client: SupabaseClient): Promise<CampData> {
-  // Persist expiries; harmless if the migration has not been applied yet.
-  await client.rpc("expire_overdue_registrations");
+  const expiry = await client.rpc("expire_overdue_registrations");
+  if (expiry.error) throw new Error(describeLoadError(expiry.error.message));
 
   const [campResult, participantResult, registrationResult, sessionResult, attendanceResult, vitalResult] = await Promise.all([
-    client.from("camps").select("id, name, location, start_date, end_date, age_group, capacity, price").order("start_date", { ascending: true }),
+    client.from("camps").select("id, name, location, start_date, end_date, age_group, capacity, price, next_camp_id, rolled_over_at").order("start_date", { ascending: true }),
     client.from("participants").select("id, first_name, last_name, email, guardian_name, guardian_email, date_of_birth, blood_type, allergies, medical_conditions, medications, emergency_contact_name, emergency_contact_phone, medical_notes").order("created_at", { ascending: false }),
     client.from("camp_registrations").select("id, camp_id, participant_id, status, payment_status, amount, paid_at, expires_on, payment_method, payment_reference"),
     client.from("sessions").select("id, camp_id, title, starts_at, ends_at, status, cancel_reason").order("starts_at", { ascending: true }),
@@ -285,6 +289,7 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
     camps: (campResult.data ?? []).map((row) => ({
       id: row.id, name: row.name, location: row.location, startDate: row.start_date, endDate: row.end_date,
       ageGroup: row.age_group, capacity: row.capacity, price: Number(row.price ?? 0),
+      nextCampId: row.next_camp_id ?? "", rolledOverAt: row.rolled_over_at ?? "",
     })),
     participants: (participantResult.data ?? []).map((row) => ({
       id: row.id, firstName: row.first_name, lastName: row.last_name, email: row.email ?? "",
@@ -327,8 +332,15 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
 
 export function campDays(camp: Camp) {
   const days: string[] = [];
-  for (let day = camp.startDate; day <= camp.endDate && days.length < 120; day = addDays(day, 1)) days.push(day);
+  for (let day = camp.startDate; day <= camp.endDate; day = addDays(day, 1)) days.push(day);
   return days;
+}
+
+export function defaultSessionDays(camp: Camp): string[] {
+  const days = campDays(camp);
+  const location = camp.location.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
+  const weekdays = location === "male" ? [1, 3, 6] : location === "hulhumale" ? [0, 1, 4] : null;
+  return weekdays ? days.filter((day) => weekdays.includes(new Date(`${day}T12:00:00`).getDay())) : days;
 }
 
 export function weekdayLabel(date: string) {

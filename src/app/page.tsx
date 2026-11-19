@@ -144,7 +144,6 @@ export default function Home() {
   const weekStart = startOfWeek(today);
   const weekEnd = addDays(weekStart, 6);
 
-  // Payments that have run past their valid-until date drop out of the roster automatically.
   const regs = registrations.map((registration) => withExpiry(registration, today));
 
   const registeredByCamp = new Map<string, number>();
@@ -190,7 +189,7 @@ export default function Home() {
     !participantTerm || `${fullName(row)} ${row.campNames}`.toLowerCase().includes(participantTerm));
   const shownParticipants = showAllParticipants ? filteredParticipants : filteredParticipants.slice(0, 5);
   const activeAthletes = new Set(regs.filter((item) => item.status === "registered").map((item) => item.participantId)).size;
-  const awaitingPayment = regs.filter((item) => item.status === "pending").length;
+  const awaitingPayment = regs.filter((item) => item.status === "registered" && item.paymentStatus !== "paid").length;
 
   const heldSessions = sessions.filter((item) => item.status !== "cancelled");
   const sortedSessions = sortSessions(heldSessions);
@@ -272,7 +271,7 @@ export default function Home() {
       id = result.data.id;
     }
 
-    setCamps((current) => sortCamps([...current.filter((camp) => camp.id !== id), { id, ...values }]));
+    setCamps((current) => sortCamps([...current.filter((camp) => camp.id !== id), { ...editingCamp, id, ...values }]));
     setSaving(false);
     closeModal();
   }
@@ -674,7 +673,14 @@ export default function Home() {
             <div className="modal-heading"><div><span className="modal-icon"><CalendarDays size={18} /></span><h2 id="camp-title">{editingCamp ? "Edit camp" : "Create a camp"}</h2><p>{editingCamp ? "Update this camp's details." : "Add a new program to your workspace."}</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
             <form className="camp-form" onSubmit={saveCamp}>
               <label>Camp name<input autoFocus defaultValue={editingCamp?.name} name="name" placeholder="e.g. Summer Skills Camp" required maxLength={120} /></label>
-              <label>Location<input defaultValue={editingCamp?.location} name="location" placeholder="Facility or field" required maxLength={200} /></label>
+              <label>Location
+                <select defaultValue={editingCamp?.location ?? ""} name="location" required>
+                  <option value="" disabled>Select a location</option>
+                  <option value="Malé">Malé</option>
+                  <option value="Hulhumalé">Hulhumalé</option>
+                  {editingCamp && !["Malé", "Hulhumalé"].includes(editingCamp.location) && <option value={editingCamp.location}>{editingCamp.location}</option>}
+                </select>
+              </label>
               <div className="form-row"><label>Start date<input defaultValue={editingCamp?.startDate} name="startDate" type="date" required /></label><label>End date<input defaultValue={editingCamp?.endDate} name="endDate" type="date" required /></label></div>
               <div className="form-row"><label>Age group<input defaultValue={editingCamp?.ageGroup} name="ageGroup" placeholder="e.g. Ages 8–12" required maxLength={60} /></label><label>Capacity<input defaultValue={editingCamp?.capacity} min="1" name="capacity" type="number" placeholder="30" required /></label></div>
               <label>Price per athlete<input defaultValue={editingCamp?.price ?? 0} min="0" name="price" step="0.01" type="number" placeholder="0 for a free camp" required /></label>
@@ -689,7 +695,7 @@ export default function Home() {
       {modal?.type === "participant" && (
         <div className="modal-backdrop" onMouseDown={backdropClose}>
           <section aria-labelledby="participant-title" aria-modal="true" className="camp-modal" role="dialog">
-            <div className="modal-heading"><div><span className="modal-icon"><UserPlus size={18} /></span><h2 id="participant-title">Add an athlete</h2><p>Register a participant. Their place in a camp is confirmed once payment is recorded.</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
+            <div className="modal-heading"><div><span className="modal-icon"><UserPlus size={18} /></span><h2 id="participant-title">Add an athlete</h2><p>Register a participant. Payment is tracked separately from enrollment.</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
             <form className="camp-form" onSubmit={saveParticipant}>
               <div className="form-row"><label>First name<input autoFocus name="firstName" required maxLength={80} /></label><label>Last name<input name="lastName" required maxLength={80} /></label></div>
               <label>Athlete email (optional)<input name="email" type="email" placeholder="name@example.com" /></label>
@@ -740,7 +746,7 @@ export default function Home() {
           <section aria-labelledby="attendance-title" aria-modal="true" className="camp-modal attendance-modal" role="dialog">
             <div className="modal-heading"><div><span className="modal-icon"><Check size={18} /></span><h2 id="attendance-title">Take attendance</h2><p>{attendanceSession.title} · {formatDate(attendanceSession.date)} · {campById.get(attendanceSession.campId)?.name}</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
             {attendanceRoster.length === 0 ? (
-              <div className="empty-state">No paid athletes are registered in this camp yet. Record a payment on an athlete&apos;s details page to confirm their place.</div>
+              <div className="empty-state">No active athletes are registered in this camp yet.</div>
             ) : (
               <>
                 <div className="attendance-tools">
