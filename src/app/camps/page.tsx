@@ -11,7 +11,9 @@ import {
   addDays,
   avatarFor,
   campDays,
+  createRegistration,
   defaultSessionDays,
+  emptyHealth,
   formatDate,
   formatDateYear,
   formatLongDate,
@@ -46,6 +48,9 @@ type Modal =
   | { type: "multi"; source?: CampSession }
   | { type: "attendance"; sessionId: string }
   | { type: "cancel"; sessionId: string }
+  | { type: "manage-sessions" }
+  | { type: "add-athlete" }
+  | { type: "edit-athlete"; participantId: string }
   | null;
 
 const statusOrder: Record<string, number> = { registered: 0, pending: 1, waitlisted: 2, expired: 3 };
@@ -91,6 +96,9 @@ function CampRoster() {
   const [cancelReason, setCancelReason] = useState("");
   const [dragId, setDragId] = useState("");
   const [dragOverDay, setDragOverDay] = useState("");
+  const [selectedSessions, setSelectedSessions] = useState<string[]>([]);
+  const [athleteMode, setAthleteMode] = useState<"new" | "existing">("new");
+  const [modalNotice, setModalNotice] = useState("");
 
   useEffect(() => {
     if (!client || !session) return;
@@ -119,22 +127,25 @@ function CampRoster() {
   useEffect(() => {
     if (!modal) return;
     const onKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key === "Escape" && !saving) {
         setModal(null);
         setFormError("");
       }
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [modal]);
+  }, [modal, saving]);
 
   function closeModal() {
+    if (saving) return;
     setModal(null);
     setFormError("");
+    setModalNotice("");
   }
 
   function openModal(next: NonNullable<Modal>) {
     setFormError("");
+    setModalNotice("");
     setNotice("");
     setModal(next);
   }
@@ -260,7 +271,9 @@ function CampRoster() {
     event.preventDefault();
     if (!selected || modal?.type !== "session") return;
     const { editing, reschedule } = modal;
-    const form = new FormData(event.currentTarget);
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const again = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "again";
     const values = {
       title: String(form.get("title")).trim(),
       date: String(form.get("date")),
@@ -305,7 +318,126 @@ function CampRoster() {
     }
     setSelectedDay(values.date);
     setSaving(false);
+    if (!editing && again) {
+      formElement.reset();
+      setModalNotice(`Added “${values.title}”. Add another session below.`);
+      return;
+    }
     closeModal();
+  }
+
+  async function deleteSelectedSessions() {
+    if (!selected || !selectedSessions.length) return;
+    const ids = campSessions.filter((item) => selectedSessions.includes(item.id)).map((item) => item.id);
+    const marks = attendance.filter((item) => ids.includes(item.sessionId)).length;
+    if (!ids.length || !window.confirm(`Permanently delete ${ids.length} session(s) and ${marks} associated attendance record(s)? This cannot be undone.`)) return;
+    setSaving(true);
+    setFormError("");
+    if (liveClient) {
+      const { data, error } = await liveClient.from("sessions").delete().eq("camp_id", selected.id).in("id", ids).select("id");
+      if (error || !data || data.length !== ids.length) {
+        setFormError(`Could not delete all sessions: ${error?.message ?? "Some sessions were not found. Reload and try again."}`);
+        if (data?.length) {
+          const deleted = new Set(data.map((item) => item.id));
+          setSessions((current) => current.filter((item) => !deleted.has(item.id)));
+          setAttendance((current) => current.filter((item) => !deleted.has(item.sessionId)));
+          setSelectedSessions((current) => current.filter((id) => !deleted.has(id)));
+        }
+        setSaving(false);
+        return;
+      }
+    }
+    setSessions((current) => current.filter((item) => !ids.includes(item.id)));
+    setAttendance((current) => current.filter((item) => !ids.includes(item.sessionId)));
+    setSelectedSessions([]);
+    setSaving(false);
+    setNotice(`Deleted ${ids.length} session(s) and ${marks} attendance record(s).`);
+    closeModal();
+  }
+
+  async function saveCampAthlete(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    const again = (event.nativeEvent as SubmitEvent).submitter?.getAttribute("value") === "again";
+    setSaving(true);
+    setFormError("");
+    setModalNotice("");
+    let athlete: Participant | undefined;
+    if (athleteMode === "new") {
+      const values = {
+        firstName: String(form.get("firstName") ?? "").trim(), lastName: String(form.get("lastName") ?? "").trim(),
+        email: String(form.get("email") ?? "").trim(), phone: String(form.get("phone") ?? "").trim(),
+        guardianName: String(form.get("guardianName") ?? "").trim(), guardianEmail: String(form.get("guardianEmail") ?? "").trim(),
+      };
+      if (!values.firstName || !values.lastName) { setFormError("First and last names are required."); setSaving(false); return; }
+      let id = crypto.randomUUID();
+      if (liveClient) {
+        const { data, error } = await liveClient.from("participants").insert({
+          first_name: values.firstName, last_name: values.lastName, email: values.email || null, phone: values.phone || null,
+          guardian_name: values.guardianName || null, guardian_email: values.guardianEmail || null,
+        }).select("id").single();
+        if (error || !data) { setFormError(`Could not create athlete: ${error?.message ?? "No athlete was returned."}`); setSaving(false); return; }
+        id = data.id;
+      }
+      athlete = { id, ...values, ...emptyHealth };
+      setParticipants((current) => [...current, athlete!]);
+    } else {
+      athlete = participants.find((item) => item.id === String(form.get("participantId")));
+      if (!athlete) { setFormError("Select an athlete."); setSaving(false); return; }
+    }
+    const previous = registrations.find((item) => item.campId === selected.id && item.participantId === athlete!.id);
+    if (previous && previous.status !== "withdrawn") { setFormError("This athlete is already in the camp."); setSaving(false); return; }
+    let status: Registration["status"];
+    if (previous) {
+      status = enrolled >= selected.capacity ? "waitlisted" : "registered";
+      if (liveClient) {
+        const { error } = await liveClient.from("camp_registrations").update({ status }).eq("id", previous.id);
+        if (error) { setFormError(`Could not add athlete to camp: ${error.message}`); setSaving(false); return; }
+      }
+      setRegistrations((current) => current.map((item) => item.id === previous.id ? { ...item, status } : item));
+    } else {
+      const result = await createRegistration(liveClient, selected, enrolled, athlete.id);
+      if (!result.registration) {
+        setFormError(`${athleteMode === "new" ? "Athlete was created, but could not be added to the camp. Select the existing athlete to retry. " : ""}${result.error}`);
+        if (athleteMode === "new") setAthleteMode("existing");
+        setSaving(false);
+        return;
+      }
+      status = result.registration.status;
+      setRegistrations((current) => [...current, result.registration!]);
+    }
+    const message = `${fullName(athlete)} added to ${selected.name}${status === "waitlisted" ? " (waitlisted; camp is full)" : ""}.`;
+    setSaving(false);
+    if (again) { formElement.reset(); setModalNotice(message); return; }
+    setNotice(message);
+    closeModal();
+  }
+
+  async function saveCampProfile(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (modal?.type !== "edit-athlete") return;
+    const person = participants.find((item) => item.id === modal.participantId);
+    if (!person) return;
+    const form = new FormData(event.currentTarget);
+    const values = {
+      firstName: String(form.get("firstName") ?? "").trim(), lastName: String(form.get("lastName") ?? "").trim(),
+      email: String(form.get("email") ?? "").trim(), phone: String(form.get("phone") ?? "").trim(),
+      guardianName: String(form.get("guardianName") ?? "").trim(), guardianEmail: String(form.get("guardianEmail") ?? "").trim(),
+      dateOfBirth: String(form.get("dateOfBirth") ?? ""),
+    };
+    if (!values.firstName || !values.lastName) { setFormError("First and last names are required."); return; }
+    setSaving(true); setFormError("");
+    if (liveClient) {
+      const { error } = await liveClient.from("participants").update({
+        first_name: values.firstName, last_name: values.lastName, email: values.email || null, phone: values.phone || null,
+        guardian_name: values.guardianName || null, guardian_email: values.guardianEmail || null, date_of_birth: values.dateOfBirth || null,
+      }).eq("id", person.id);
+      if (error) { setFormError(`Could not update athlete: ${error.message}`); setSaving(false); return; }
+    }
+    setParticipants((current) => current.map((item) => item.id === person.id ? { ...item, ...values } : item));
+    setSaving(false); setNotice(`Updated ${values.firstName} ${values.lastName}.`); closeModal();
   }
 
   async function moveSession(target: CampSession, day: string) {
@@ -596,6 +728,7 @@ function CampRoster() {
                   <div className="panel-heading">
                     <div><h2>Session calendar</h2><p>Click a day for details. Drag a session onto another day to move it. Days outside {formatDate(selected.startDate)} – {formatDate(selected.endDate)} are not available.</p></div>
                     <div className="panel-actions">
+                      <button className="secondary-button small-button" type="button" onClick={() => { setSelectedSessions([]); openModal({ type: "manage-sessions" }); }}>Manage sessions</button>
                       <button className="secondary-button small-button" type="button" onClick={() => openMulti()}><Copy size={14} />Several days</button>
                       <button className="primary-button small-button" type="button" onClick={() => openModal({ type: "session", date: activeDay })}><Plus size={14} />Add session</button>
                     </div>
@@ -720,6 +853,7 @@ function CampRoster() {
                 <section className="panel detail-panel">
                   <div className="panel-heading">
                     <div><h2>Athletes in this camp</h2><p>Select an athlete to open their full record.</p></div>
+                    <button className="primary-button small-button" type="button" onClick={() => { setAthleteMode("new"); openModal({ type: "add-athlete" }); }}><Plus size={14} />Add athlete</button>
                   </div>
                   <div className="chip-row" role="group" aria-label="Filter by status">
                     {chips.map((chip) => (
@@ -737,7 +871,7 @@ function CampRoster() {
                             <td><div className="athlete-cell"><span className={`athlete-avatar ${avatarFor(fullName(athlete!))}`}>{initialsOf(athlete!)}</span><strong>{fullName(athlete!)}</strong></div></td>
                             <td><span className={`pay-badge ${view.cls}`}>{view.label}</span><span className="cell-sub">{view.detail}</span></td>
                             <td>{rate === null ? "—" : <span className="attendance-cell"><span className="mini-progress"><span style={{ width: `${rate}%` }} /></span>{rate}%</span>}</td>
-                            <td><div className="row-actions"><Link className="row-edit" href={`/participants?id=${athlete!.id}&camp=${selected.id}`}>View record</Link></div></td>
+                            <td><div className="row-actions"><button className="row-edit" type="button" onClick={() => openModal({ type: "edit-athlete", participantId: athlete!.id })}>Edit</button><Link className="row-edit" href={`/participants?id=${athlete!.id}&camp=${selected.id}`}>View record</Link></div></td>
                           </tr>
                         ))}</tbody>
                       </table>
@@ -762,12 +896,66 @@ function CampRoster() {
                 : editingSession && <p className="field-hint">Change the date to move this session. Attendance already recorded stays with the session.</p>}
               <div className="form-row"><label>Start time<input defaultValue={editingSession?.startTime} name="startTime" type="time" required /></label><label>End time<input defaultValue={editingSession?.endTime} name="endTime" type="time" required /></label></div>
               {formError && <p className="camp-alert" role="alert">{formError}</p>}
-              <div className="modal-actions"><button className="secondary-button" onClick={closeModal} type="button">Cancel</button><button className="primary-button" disabled={saving} type="submit">{saving ? "Saving…" : sessionModal?.reschedule ? "Reschedule" : editingSession ? "Save changes" : <><Plus size={17} />Add session</>}</button></div>
+              {modalNotice && <p className="camp-alert camp-alert-info" role="status">{modalNotice}</p>}
+              <div className="modal-actions"><button className="secondary-button" onClick={closeModal} type="button">Cancel</button>{!editingSession && <button className="secondary-button" disabled={saving} type="submit" value="again">Save and add another</button>}<button className="primary-button" disabled={saving} type="submit">{saving ? "Saving…" : sessionModal?.reschedule ? "Reschedule" : editingSession ? "Save changes" : <><Plus size={17} />Add session</>}</button></div>
               <p className="demo-note">{client ? "Saved to your private Supabase account." : "Demo only: changes are not saved after a refresh."}</p>
             </form>
           </section>
         </div>
       )}
+
+      {modal?.type === "manage-sessions" && selected && (
+        <div className="modal-backdrop" onMouseDown={backdropClose}>
+          <section aria-labelledby="manage-sessions-title" aria-modal="true" className="camp-modal" role="dialog">
+            <div className="modal-heading"><div><h2 id="manage-sessions-title">Manage sessions</h2><p>{selected.name} · Select sessions to delete permanently.</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
+            <div className="camp-form">
+              <div className="panel-actions"><button className="secondary-button" type="button" onClick={() => setSelectedSessions(campSessions.map((item) => item.id))}>Select all</button><button className="secondary-button" type="button" onClick={() => setSelectedSessions([])}>Clear selection</button></div>
+              {campSessions.length === 0 && <p>No sessions in this camp.</p>}
+              <div className="session-select-list">{campSessions.map((item) => <label className="session-select-item" key={item.id}><input type="checkbox" checked={selectedSessions.includes(item.id)} onChange={(event) => { const checked = event.target.checked; setSelectedSessions((current) => checked ? [...current, item.id] : current.filter((id) => id !== item.id)); }} /> <span>{formatDateYear(item.date)} · {item.startTime} · {item.title}{item.status === "cancelled" ? " (cancelled)" : ""}</span></label>)}</div>
+              <p>{selectedSessions.length} selected · {attendance.filter((item) => selectedSessions.includes(item.sessionId)).length} attendance records will be deleted.</p>
+              {formError && <p className="camp-alert" role="alert">{formError}</p>}
+              <div className="modal-actions"><button className="secondary-button" type="button" onClick={closeModal}>Close</button><button className="primary-button primary-button-warn" type="button" disabled={saving || !selectedSessions.length} onClick={deleteSelectedSessions}>{saving ? "Deleting…" : "Delete selected"}</button></div>
+            </div>
+          </section>
+        </div>
+      )}
+
+      {modal?.type === "add-athlete" && selected && (
+        <div className="modal-backdrop" onMouseDown={backdropClose}>
+          <section aria-labelledby="add-camp-athlete-title" aria-modal="true" className="camp-modal" role="dialog">
+            <div className="modal-heading"><div><h2 id="add-camp-athlete-title">Add athlete</h2><p>{selected.name} · {enrolled}/{selected.capacity} active places</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
+            <form className="camp-form" onSubmit={saveCampAthlete}>
+              <label>Athlete<select value={athleteMode} disabled={saving} onChange={(event) => { setAthleteMode(event.target.value === "existing" ? "existing" : "new"); setFormError(""); }}><option value="new">Create new athlete</option><option value="existing">Choose existing athlete</option></select></label>
+              {athleteMode === "existing" ? <label>Existing athlete<select name="participantId" required defaultValue=""><option value="">Select an athlete</option>{participants.filter((person) => !registrations.some((item) => item.campId === selected.id && item.participantId === person.id && item.status !== "withdrawn")).sort((a, b) => fullName(a).localeCompare(fullName(b))).map((person) => <option key={person.id} value={person.id}>{fullName(person)}</option>)}</select></label> : <>
+                <div className="form-row"><label>First name<input name="firstName" required maxLength={80} /></label><label>Last name<input name="lastName" required maxLength={80} /></label></div>
+                <div className="form-row"><label>Email<input name="email" type="email" /></label><label>Phone<input name="phone" type="tel" /></label></div>
+                <div className="form-row"><label>Guardian name<input name="guardianName" /></label><label>Guardian email<input name="guardianEmail" type="email" /></label></div>
+              </>}
+              <p className="field-hint">If the camp is full, the athlete will be waitlisted. Existing withdrawn registrations retain payment and attendance history.</p>
+              {formError && <p className="camp-alert" role="alert">{formError}</p>}{modalNotice && <p className="camp-alert camp-alert-info" role="status">{modalNotice}</p>}
+              <div className="modal-actions"><button className="secondary-button" type="button" onClick={closeModal}>Cancel</button><button className="secondary-button" type="submit" value="again" disabled={saving}>Save and add another</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Add athlete"}</button></div>
+            </form>
+          </section>
+        </div>
+      )}
+
+      {modal?.type === "edit-athlete" && (() => {
+        const athlete = participants.find((item) => item.id === modal.participantId);
+        if (!athlete) return null;
+        return <div className="modal-backdrop" onMouseDown={backdropClose}>
+          <section aria-labelledby="edit-camp-athlete-title" aria-modal="true" className="camp-modal" role="dialog">
+            <div className="modal-heading"><div><h2 id="edit-camp-athlete-title">Edit athlete details</h2><p>{fullName(athlete)}</p></div><button className="icon-button" aria-label="Close dialog" onClick={closeModal} type="button"><X size={19} /></button></div>
+            <form className="camp-form" onSubmit={saveCampProfile}>
+              <div className="form-row"><label>First name<input name="firstName" defaultValue={athlete.firstName} required maxLength={80} /></label><label>Last name<input name="lastName" defaultValue={athlete.lastName} required maxLength={80} /></label></div>
+              <label>Date of birth<input name="dateOfBirth" type="date" defaultValue={athlete.dateOfBirth} /></label>
+              <div className="form-row"><label>Email<input name="email" type="email" defaultValue={athlete.email} /></label><label>Phone<input name="phone" type="tel" defaultValue={athlete.phone} /></label></div>
+              <div className="form-row"><label>Guardian name<input name="guardianName" defaultValue={athlete.guardianName} /></label><label>Guardian email<input name="guardianEmail" type="email" defaultValue={athlete.guardianEmail} /></label></div>
+              {formError && <p className="camp-alert" role="alert">{formError}</p>}
+              <div className="modal-actions"><button className="secondary-button" type="button" onClick={closeModal}>Cancel</button><button className="primary-button" type="submit" disabled={saving}>{saving ? "Saving…" : "Save changes"}</button></div>
+            </form>
+          </section>
+        </div>;
+      })()}
 
       {modal?.type === "cancel" && cancelTarget && (
         <div className="modal-backdrop" onMouseDown={backdropClose}>

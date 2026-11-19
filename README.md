@@ -44,6 +44,8 @@ On a camp page, choose its **Next monthly camp** explicitly. After the current c
 
 On a camp's session calendar, expand **Bulk import sessions from CSV** and download the session template. Enter `title`, `date` (YYYY-MM-DD), `start_time` and `end_time` (24-hour HH:MM). Dates must be within the selected camp, and end times must be later than start times. Upload up to 1,000 rows and 1 MB per file. Rows matching an existing session or an earlier CSV row on date and start time are skipped. The import uses the currently loaded calendar; reload first if another user may have changed it. Demo-mode imports are not saved after a refresh.
 
+On the camp page, use **Manage sessions** to select and delete several sessions; the confirmation shows how many attendance records will also be deleted. **Add athlete** creates a person or adds an existing person to that camp, including placing them on the waitlist when full. Use **Edit** beside a roster entry to change contact details. The add-athlete and add-session forms offer **Save and add another**.
+
 ## Camps and athlete records
 
 Click a camp (on the overview or the **Camps** page) to see everyone in it with their payment status, valid-until date and attendance; filter by Paid, Not paid, Waitlisted or Expired. From there open any athlete's record, and from an athlete's record click a camp name to return to that camp. The **Athlete records** page can also be filtered by camp.
