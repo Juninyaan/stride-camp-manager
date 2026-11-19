@@ -22,6 +22,7 @@ export type Participant = {
   firstName: string;
   lastName: string;
   email: string;
+  phone: string;
   guardianName: string;
   guardianEmail: string;
   dateOfBirth: string;
@@ -273,7 +274,7 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
 
   const [campResult, participantResult, registrationResult, sessionResult, attendanceResult, vitalResult] = await Promise.all([
     client.from("camps").select("id, name, location, start_date, end_date, age_group, capacity, price, next_camp_id, rolled_over_at").order("start_date", { ascending: true }),
-    client.from("participants").select("id, first_name, last_name, email, guardian_name, guardian_email, date_of_birth, blood_type, allergies, medical_conditions, medications, emergency_contact_name, emergency_contact_phone, medical_notes").order("created_at", { ascending: false }),
+    client.from("participants").select("id, first_name, last_name, email, phone, guardian_name, guardian_email, date_of_birth, blood_type, allergies, medical_conditions, medications, emergency_contact_name, emergency_contact_phone, medical_notes").order("created_at", { ascending: false }),
     client.from("camp_registrations").select("id, camp_id, participant_id, status, payment_status, amount, paid_at, expires_on, payment_method, payment_reference"),
     client.from("sessions").select("id, camp_id, title, starts_at, ends_at, status, cancel_reason").order("starts_at", { ascending: true }),
     client.from("attendance").select("session_id, participant_id, status"),
@@ -292,7 +293,7 @@ export async function loadCampData(client: SupabaseClient): Promise<CampData> {
       nextCampId: row.next_camp_id ?? "", rolledOverAt: row.rolled_over_at ?? "",
     })),
     participants: (participantResult.data ?? []).map((row) => ({
-      id: row.id, firstName: row.first_name, lastName: row.last_name, email: row.email ?? "",
+      id: row.id, firstName: row.first_name, lastName: row.last_name, email: row.email ?? "", phone: row.phone ?? "",
       guardianName: row.guardian_name ?? "", guardianEmail: row.guardian_email ?? "",
       dateOfBirth: row.date_of_birth ?? "", bloodType: row.blood_type ?? "", allergies: row.allergies ?? "",
       conditions: row.medical_conditions ?? "", medications: row.medications ?? "",
@@ -398,7 +399,7 @@ export function seedData(): CampData {
     { id: "demo-camp-3", name: "All-Star Skills Week", location: "Stride Performance Center", startDate: "2026-11-02", endDate: "2026-11-06", ageGroup: "Ages 10–14", capacity: 32, price: 750 },
     { id: "demo-camp-4", name: "Foundations Kickoff", location: "Eastside Community Field", startDate: "2026-10-05", endDate: "2026-10-09", ageGroup: "Ages 9–13", capacity: 28, price: 400 },
   ];
-  const blank = { email: "", guardianName: "", guardianEmail: "", dateOfBirth: "", bloodType: "", allergies: "", conditions: "", medications: "", emergencyName: "", emergencyPhone: "", medicalNotes: "" };
+  const blank = { email: "", phone: "", guardianName: "", guardianEmail: "", dateOfBirth: "", bloodType: "", allergies: "", conditions: "", medications: "", emergencyName: "", emergencyPhone: "", medicalNotes: "" };
   const participants: Participant[] = [
     { ...blank, id: "demo-p-1", firstName: "Olivia", lastName: "Rhye", dateOfBirth: "2014-03-12", bloodType: "O+", allergies: "Peanuts", conditions: "Mild asthma", medications: "Inhaler as needed", emergencyName: "Sara Rhye", emergencyPhone: "555-0100", guardianName: "Sara Rhye" },
     ...[["Phoenix", "Baker"], ["Lana", "Steiner"], ["Demi", "Wilkinson"], ["Candice", "Wu"], ["Natali", "Craig"], ["Drew", "Cano"], ["Orlando", "Diggs"]]

@@ -300,6 +300,7 @@ export default function Home() {
       firstName: String(form.get("firstName")).trim(),
       lastName: String(form.get("lastName")).trim(),
       email: String(form.get("email")).trim(),
+      phone: String(form.get("phone")).trim(),
       guardianName: String(form.get("guardianName")).trim(),
       guardianEmail: String(form.get("guardianEmail")).trim(),
     };
@@ -310,7 +311,7 @@ export default function Home() {
     let id = crypto.randomUUID();
     if (liveClient) {
       const inserted = await liveClient.from("participants").insert({
-        first_name: values.firstName, last_name: values.lastName, email: values.email || null,
+        first_name: values.firstName, last_name: values.lastName, email: values.email || null, phone: values.phone || null,
         guardian_name: values.guardianName || null, guardian_email: values.guardianEmail || null,
       }).select("id").single();
       if (inserted.error) {
@@ -699,6 +700,7 @@ export default function Home() {
             <form className="camp-form" onSubmit={saveParticipant}>
               <div className="form-row"><label>First name<input autoFocus name="firstName" required maxLength={80} /></label><label>Last name<input name="lastName" required maxLength={80} /></label></div>
               <label>Athlete email (optional)<input name="email" type="email" placeholder="name@example.com" /></label>
+              <label>Athlete phone (optional)<input name="phone" type="tel" /></label>
               <div className="form-row"><label>Guardian name (optional)<input name="guardianName" /></label><label>Guardian email (optional)<input name="guardianEmail" type="email" /></label></div>
               <label>Join a camp
                 <select defaultValue="" name="campId">

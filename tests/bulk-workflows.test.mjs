@@ -28,6 +28,23 @@ test("spreadsheet-safe escaped values round trip", () => {
   assert.equal(row.last_name, "'literal");
 });
 
+test("a single period clears optional athlete fields without changing required fields", () => {
+  const [row] = parseParticipantCsv(`${headers}\n.,A,B,.,.,.,active,unpaid`);
+  assert.deepEqual(row, { id: "", first_name: "A", last_name: "B", email: "", guardian_name: "", guardian_email: "", active: "active", paid: "unpaid" });
+  assert.throws(() => parseParticipantCsv(`${headers}\n,A,B,,,,.,unpaid`), /active must/);
+  assert.throws(() => parseParticipantCsv(`${headers}\n,A,B,,,,active,.`), /paid must/);
+  assert.throws(() => parseParticipantCsv(`${headers}\n,A,B,not.an.email,,,active,unpaid`), /invalid email/);
+  assert.equal(parseParticipantCsv(`${headers}\n,.,B,,,,active,unpaid`)[0].first_name, ".");
+});
+
+test("phone column is optional for old templates and preserves formatted numbers", () => {
+  const [oldRow] = parseParticipantCsv(`${headers}\n,A,B,,,,active,unpaid`);
+  assert.equal(Object.hasOwn(oldRow, "phone"), false);
+  const [newRow] = parseParticipantCsv(`${headers},phone\n,A,B,,,,active,unpaid,"'+960 1234567"`);
+  assert.equal(newRow.phone, "+960 1234567");
+  assert.equal(parseParticipantCsv(`${headers},phone\n,A,B,,,,active,unpaid,.`)[0].phone, "");
+});
+
 test("session CSV validates rows and supports reordered headers and quoted titles", () => {
   const rows = parseSessionCsv('date,title,end_time,start_time\n2026-11-02,"Drills, passing",21:00,20:00', camp);
   assert.deepEqual(rows, [{ title: "Drills, passing", date: "2026-11-02", startTime: "20:00", endTime: "21:00" }]);

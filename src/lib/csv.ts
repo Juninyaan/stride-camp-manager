@@ -1,4 +1,4 @@
-export function parseCsv(text: string, columns: readonly string[]): string[][] {
+export function parseCsv(text: string, columns: readonly string[], optionalColumns: readonly string[] = []): string[][] {
   const rows: string[][] = [];
   let row: string[] = [];
   let cell = "";
@@ -28,12 +28,13 @@ export function parseCsv(text: string, columns: readonly string[]): string[][] {
   if (quoted) throw new Error("Unclosed quoted CSV field.");
   if (cell || row.length) { row.push(cell); if (row.some((value) => value.trim())) rows.push(row); }
   const headers = rows.shift()?.map((value) => value.trim().toLowerCase());
-  if (!headers || headers.length !== columns.length || columns.some((name) => !headers.includes(name)) || new Set(headers).size !== headers.length) {
-    throw new Error(`CSV headers must be: ${columns.join(", ")}.`);
+  if (!headers || columns.some((name) => !headers.includes(name)) || headers.some((name) => !columns.includes(name) && !optionalColumns.includes(name)) || new Set(headers).size !== headers.length) {
+    throw new Error(`CSV headers must include: ${columns.join(", ")}${optionalColumns.length ? `; optional: ${optionalColumns.join(", ")}` : ""}.`);
   }
+  const outputColumns = [...columns, ...optionalColumns.filter((name) => headers.includes(name))];
   if (!rows.length || rows.length > 1000) throw new Error("The CSV must contain between 1 and 1000 rows.");
   return rows.map((cells, index) => {
     if (cells.length !== headers.length) throw new Error(`Row ${index + 2}: expected ${headers.length} columns.`);
-    return columns.map((column) => cells[headers.indexOf(column)].trim());
+    return outputColumns.map((column) => cells[headers.indexOf(column)].trim());
   });
 }

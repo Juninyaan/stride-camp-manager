@@ -32,7 +32,7 @@ export function ParticipantImport({ client, camps, participants, registrations, 
       const registration = selected.find((item) => item.participantId === person.id);
       return [person.id, person.firstName, person.lastName, person.email, person.guardianName, person.guardianEmail,
         registration?.status === "withdrawn" ? "inactive" : "active",
-        registration && registration.paymentStatus !== "unpaid" && registration.paidOn ? "paid" : "unpaid"];
+        registration && registration.paymentStatus !== "unpaid" && registration.paidOn ? "paid" : "unpaid", person.phone];
     });
     // Prefix spreadsheet formula-like values to prevent formula execution on opening the CSV.
     const escape = (value: string) => `"${(/^(?:'|[\s]*[=+\-@\t\r])/.test(value) ? `'${value}` : value).replace(/"/g, '""')}"`;
@@ -91,7 +91,7 @@ export function ParticipantImport({ client, camps, participants, registrations, 
           <button type="button" className="secondary-button" disabled={!campId} onClick={() => { try { download("camp"); } catch (problem) { setError(problem instanceof Error ? problem.message : "Export failed."); } }}>Export camp athletes</button>
           <button type="button" className="secondary-button" disabled={!campId} onClick={() => download("all")}>Export all athletes</button>
         </div>
-        <p className="field-hint">Blank ID creates an athlete; an existing ID updates that athlete. Use active/inactive and paid/unpaid. All columns are required; optional values may be blank. Inactive keeps history. Paid defaults to the camp price and dates. Existing paid details are retained unless changed to unpaid. In an all-athlete export, athletes not yet in the selected camp default to active and unpaid; remove rows you do not want to assign. Exported formula-like values are protected for spreadsheet safety.</p>
+        <p className="field-hint">Blank ID creates an athlete; an existing ID updates that athlete. Use active/inactive and paid/unpaid. Optional values may be blank or a single period (.). Blank or period values clear existing optional profile fields; omit the phone column entirely to retain existing phone numbers. Inactive keeps history. Paid defaults to the camp price and dates. Existing paid details are retained unless changed to unpaid. In an all-athlete export, athletes not yet in the selected camp default to active and unpaid; remove rows you do not want to assign. Exported formula-like values are protected for spreadsheet safety.</p>
         <label>CSV file<input type="file" accept=".csv,text/csv" disabled={!campId || !client || busy} onChange={selectFile} /></label>
         {!client && <p className="field-hint">Import requires a signed-in Supabase account; demo data is not saved.</p>}
         {rows.length > 0 && <p role="status">{rows.length} rows ready: {rows.filter((row) => !row.id).length} new, {rows.filter((row) => row.id).length} updates. Import replaces the listed profile fields and selected camp statuses.</p>}

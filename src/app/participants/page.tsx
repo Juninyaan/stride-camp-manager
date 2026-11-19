@@ -314,6 +314,7 @@ function AthleteRecords() {
       firstName: String(form.get("firstName")).trim(),
       lastName: String(form.get("lastName")).trim(),
       email: String(form.get("email")).trim(),
+      phone: String(form.get("phone")).trim(),
       guardianName: String(form.get("guardianName")).trim(),
       guardianEmail: String(form.get("guardianEmail")).trim(),
       dateOfBirth: String(form.get("dateOfBirth")),
@@ -323,7 +324,7 @@ function AthleteRecords() {
     setFormError("");
     if (liveClient) {
       const { error } = await liveClient.from("participants").update({
-        first_name: values.firstName, last_name: values.lastName, email: values.email || null,
+        first_name: values.firstName, last_name: values.lastName, email: values.email || null, phone: values.phone || null,
         guardian_name: values.guardianName || null, guardian_email: values.guardianEmail || null,
         date_of_birth: values.dateOfBirth || null,
       }).eq("id", selected.id);
@@ -502,7 +503,7 @@ function AthleteRecords() {
                   <span className={`athlete-avatar athlete-avatar-large ${avatarFor(fullName(selected))}`}>{initialsOf(selected)}</span>
                   <div className="athlete-header-copy">
                     <h2>{fullName(selected)}</h2>
-                    <p>{[age !== null ? `${age} years old` : "", selected.email, selected.guardianName ? `Guardian: ${selected.guardianName}${selected.guardianEmail ? ` (${selected.guardianEmail})` : ""}` : ""].filter(Boolean).join(" · ") || "No contact details yet"}</p>
+                    <p>{[age !== null ? `${age} years old` : "", selected.email, selected.phone, selected.guardianName ? `Guardian: ${selected.guardianName}${selected.guardianEmail ? ` (${selected.guardianEmail})` : ""}` : ""].filter(Boolean).join(" · ") || "No contact details yet"}</p>
                   </div>
                   <button className="secondary-button" type="button" onClick={() => openModal({ type: "profile" })}>Edit details</button>
                 </section>
@@ -669,6 +670,7 @@ function AthleteRecords() {
               <div className="form-row"><label>First name<input autoFocus defaultValue={selected.firstName} name="firstName" required maxLength={80} /></label><label>Last name<input defaultValue={selected.lastName} name="lastName" required maxLength={80} /></label></div>
               <label>Date of birth<input defaultValue={selected.dateOfBirth} max={today} name="dateOfBirth" type="date" /></label>
               <label>Athlete email<input defaultValue={selected.email} name="email" type="email" /></label>
+              <label>Athlete phone<input defaultValue={selected.phone} name="phone" type="tel" /></label>
               <div className="form-row"><label>Guardian name<input defaultValue={selected.guardianName} name="guardianName" /></label><label>Guardian email<input defaultValue={selected.guardianEmail} name="guardianEmail" type="email" /></label></div>
               {formError && <p className="camp-alert" role="alert">{formError}</p>}
               <div className="modal-actions"><button className="secondary-button" onClick={closeModal} type="button">Cancel</button><button className="primary-button" disabled={saving} type="submit">{saving ? "Saving…" : "Save changes"}</button></div>
